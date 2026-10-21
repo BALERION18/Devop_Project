@@ -14,6 +14,9 @@ import { getHealth } from './controllers/serverController.js';
 
 const app = express();
 
+// Trust reverse proxy (Nginx) for secure rate-limiting and client IP resolution
+app.set('trust proxy', 1);
+
 // Security HTTP headers
 app.use(
   helmet({
