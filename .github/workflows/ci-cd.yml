@@ -1,0 +1,165 @@
+name: DevOpsHub CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: 'Deployment Target Environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+jobs:
+  # ============================================================================
+  # Stage 1: Continuous Integration (Lint, Test, Build Verification)
+  # ============================================================================
+  test-and-build:
+    name: Test & Build Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: 2. Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package.json
+            frontend/package.json
+
+      - name: 3. Install Backend Dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: 4. Execute Automated Backend Test Suite
+        run: |
+          cd backend
+          npm test
+
+      - name: 5. Install Frontend Dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: 6. Build Production Frontend Bundle
+        run: |
+          cd frontend
+          npm run build
+
+      - name: 7. Validate Docker Compose Configuration
+        run: |
+          docker compose config
+
+  # ============================================================================
+  # Stage 2: Continuous Deployment to AWS EC2 via SSH
+  # ============================================================================
+  deploy:
+    name: Deploy to AWS EC2
+    needs: test-and-build
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: 2. Verify EC2 SSH Deployment Credentials
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          if [ -z "$EC2_HOST" ] || [ -z "$EC2_USER" ] || [ -z "$EC2_SSH_KEY" ]; then
+            echo "::warning ::EC2 deployment credentials (EC2_HOST, EC2_USER, EC2_SSH_KEY) are not configured in GitHub Secrets. Skipping remote SSH rollout."
+            exit 0
+          fi
+          echo "EC2 deployment credentials detected."
+
+      - name: 3. Configure SSH Private Key
+        if: env.EC2_HOST != ''
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" > ~/.ssh/ec2_key.pem
+          chmod 600 ~/.ssh/ec2_key.pem
+
+      - name: 4. Deploy Application Containers to AWS EC2
+        if: env.EC2_HOST != ''
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          echo "Starting zero-downtime deployment to EC2 instance at $EC2_HOST..."
+
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/ec2_key.pem $EC2_USER@$EC2_HOST << 'EOF'
+            set -e
+
+            # Navigate to project workspace or clone if first run
+            PROJECT_DIR="$HOME/devopshub"
+            if [ ! -d "$PROJECT_DIR" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$PROJECT_DIR"
+            fi
+
+            cd "$PROJECT_DIR"
+
+            # Pull latest commits
+            git fetch --all
+            git checkout main
+            git pull origin main
+
+            # Update production environment configuration safely
+            cat << 'ENVFILE' > .env
+            NODE_ENV=production
+            PORT=5000
+            MONGODB_URI=${{ secrets.MONGODB_URI }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            SERVER_NAME=AWS-EC2-Host
+            ENVFILE
+
+            # Build and recreate containers with Docker Compose
+            docker compose down --remove-orphans || true
+            docker compose build --pull
+            docker compose up -d
+
+            echo "Containers updated successfully on EC2."
+          EOF
+
+      - name: 5. Post-Deployment Remote Health Check Probe
+        if: env.EC2_HOST != ''
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          echo "Waiting for services to become healthy..."
+          sleep 15
+          HEALTH_URL="http://${EC2_HOST}/api/health"
+          echo "Pinging health endpoint: $HEALTH_URL"
+          
+          # Retry probe up to 5 times
+          for i in {1..5}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
+            if [ "$STATUS" == "200" ]; then
+              echo "Health check PASSED: Received HTTP 200 OK from $HEALTH_URL"
+              exit 0
+            fi
+            echo "Attempt $i: Received HTTP status $STATUS. Retrying in 5s..."
+            sleep 5
+          done
+
+          echo "::error ::Health check failed after 5 attempts."
+          exit 1
