@@ -20,6 +20,9 @@ services:
       - SERVER_NAME=${SERVER_NAME:-EC2-Production-Host}
     networks:
       - devopshub-network
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     # Backend port is not exposed to public internet directly; traffic flows via Nginx
     expose:
       - "5000"
