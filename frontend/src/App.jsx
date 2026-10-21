@@ -10,7 +10,9 @@ import { Login } from './pages/Login.jsx';
 import { Signup } from './pages/Signup.jsx';
 import { Overview } from './pages/Overview.jsx';
 import { Deployments } from './pages/Deployments.jsx';
-import { ServerStatus } from './pages/ServerStatus.jsx';
+import { Servers } from './pages/Servers.jsx';
+import { UptimeMonitors } from './pages/UptimeMonitors.jsx';
+import { Team } from './pages/Team.jsx';
 import { Settings } from './pages/Settings.jsx';
 import { NotFound } from './pages/NotFound.jsx';
 
@@ -36,7 +38,10 @@ export default function App() {
               <Route index element={<Overview />} />
               <Route path="overview" element={<Navigate to="/" replace />} />
               <Route path="deployments" element={<Deployments />} />
-              <Route path="server-status" element={<ServerStatus />} />
+              <Route path="servers" element={<Servers />} />
+              <Route path="server-status" element={<Navigate to="/servers" replace />} />
+              <Route path="monitors" element={<UptimeMonitors />} />
+              <Route path="team" element={<Team />} />
               <Route path="settings" element={<Settings />} />
             </Route>
 

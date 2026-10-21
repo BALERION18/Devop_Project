@@ -15,6 +15,7 @@ import {
   Github,
   Database,
   Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 import api from '../services/api.js';
 import { Header } from '../components/Header.jsx';
@@ -30,6 +31,7 @@ export const Deployments = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
   const [envFilter, setEnvFilter] = useState('all');
+  const [serviceFilter, setServiceFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [meta, setMeta] = useState({ total: 0, githubConfigured: false, dbConnected: true });
 
@@ -57,7 +59,11 @@ export const Deployments = () => {
 
       const res = await api.get('/deployments', { params });
       if (res.data.success) {
-        setDeployments(res.data.deployments || []);
+        let list = res.data.deployments || [];
+        if (serviceFilter !== 'all') {
+          list = list.filter((d) => d.serviceName === serviceFilter);
+        }
+        setDeployments(list);
         setMeta({
           total: res.data.total || 0,
           githubConfigured: res.data.githubConfigured,
@@ -70,6 +76,24 @@ export const Deployments = () => {
     } finally {
       setLoading(false);
       if (isManual) setRefreshing(false);
+    }
+  };
+
+  const handleRollback = async (dep) => {
+    if (!confirm(`Trigger emergency rollback for ${dep.serviceName} to commit ${dep.commitSha}?`)) return;
+    try {
+      const res = await api.post('/deployments/rollback', {
+        targetDeploymentId: dep._id,
+        commitSha: dep.commitSha,
+        serviceName: dep.serviceName,
+        environment: dep.environment,
+      });
+      if (res.data.success) {
+        addToast(`Rollback to ${dep.commitSha} initiated!`, 'warning');
+        fetchDeployments();
+      }
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Rollback failed.', 'error');
     }
   };
 
@@ -211,6 +235,21 @@ export const Deployments = () => {
 
           {/* Filters & Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {/* Service Filter */}
+            <select
+              className="form-input"
+              value={serviceFilter}
+              onChange={(e) => setServiceFilter(e.target.value)}
+              style={{ width: 'auto', height: '38px', fontSize: '0.8125rem', padding: '6px 12px' }}
+            >
+              <option value="all">All Microservices</option>
+              <option value="devopshub-app">devopshub-app</option>
+              <option value="frontend-client">frontend-client</option>
+              <option value="backend-api">backend-api</option>
+              <option value="auth-service">auth-service</option>
+              <option value="payment-gateway">payment-gateway</option>
+            </select>
+
             {/* Status Filter */}
             <select
               className="form-input"
@@ -344,14 +383,25 @@ export const Deployments = () => {
                       {new Date(dep.createdAt || dep.deployedAt).toLocaleString()}
                     </td>
                     <td className="hub-td" style={{ textAlign: 'right' }}>
-                      <button
-                        onClick={() => setSelectedDeployment(dep)}
-                        className="btn btn-outline"
-                        style={{ padding: '5px 10px', fontSize: '0.75rem' }}
-                      >
-                        <span>Logs</span>
-                        <ChevronRight size={13} />
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
+                        <button
+                          onClick={() => handleRollback(dep)}
+                          className="btn btn-outline"
+                          style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#F59E0B', borderColor: 'rgba(245, 158, 11, 0.3)' }}
+                          title="Trigger emergency rollback to this build"
+                        >
+                          <RotateCcw size={12} />
+                          <span>Rollback</span>
+                        </button>
+                        <button
+                          onClick={() => setSelectedDeployment(dep)}
+                          className="btn btn-outline"
+                          style={{ padding: '5px 10px', fontSize: '0.75rem' }}
+                        >
+                          <span>Logs</span>
+                          <ChevronRight size={13} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

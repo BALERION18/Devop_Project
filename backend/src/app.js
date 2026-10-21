@@ -10,6 +10,9 @@ import authRoutes from './routes/authRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import deploymentRoutes from './routes/deploymentRoutes.js';
 import serverRoutes from './routes/serverRoutes.js';
+import fleetRoutes from './routes/fleetRoutes.js';
+import uptimeRoutes from './routes/uptimeRoutes.js';
+import teamRoutes from './routes/teamRoutes.js';
 import { getHealth } from './controllers/serverController.js';
 
 const app = express();
@@ -30,6 +33,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
+  'http://13.232.254.140',
 ];
 
 app.use(
@@ -64,6 +68,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/deployments', deploymentRoutes);
 app.use('/api/server', serverRoutes);
+app.use('/api/fleet', fleetRoutes);
+app.use('/api/monitors', uptimeRoutes);
+app.use('/api/team', teamRoutes);
 
 // Root route
 app.get('/', (req, res) => {

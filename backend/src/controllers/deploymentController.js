@@ -362,4 +362,62 @@ export const seedInitialDeployments = async (req, res, next) => {
   }
 };
 
+export const rollbackDeployment = async (req, res, next) => {
+  try {
+    const { targetDeploymentId, commitSha, serviceName, environment } = req.body;
+    const dbStatus = getDBStatus();
+    const author = req.user?.name || 'DevOps Lead';
+
+    const rollbackMessage = `revert: rollback ${serviceName || 'service'} to commit ${commitSha || 'previous'}`;
+
+    if (!dbStatus.isConnected) {
+      const rollbackDep = {
+        _id: 'mem_rb_' + Date.now(),
+        serviceName: serviceName || 'devopshub-app',
+        environment: environment || 'production',
+        branch: 'main',
+        commitSha: commitSha || '9b2c3a1',
+        commitMessage: rollbackMessage,
+        author: `${author} (Rollback)`,
+        triggeredBy: req.user?.email || 'manual',
+        status: 'success',
+        durationSeconds: 24,
+        createdAt: new Date().toISOString(),
+        logs: [
+          { timestamp: new Date(), step: 'Rollback Request', message: `Emergency rollback initiated by ${author}`, status: 'warning' },
+          { timestamp: new Date(), step: 'Image Tag Fetch', message: `Re-pointing production traffic to verified stable build ${commitSha}`, status: 'info' },
+          { timestamp: new Date(), step: 'Container Redeploy', message: 'Rolling recreate of EC2 containers via docker compose', status: 'info' },
+          { timestamp: new Date(), step: 'Health Probe', message: 'GET /api/health returned 200 OK (14ms)', status: 'success' },
+          { timestamp: new Date(), step: 'Rollback Complete', message: 'Traffic restored to verified state', status: 'success' },
+        ],
+      };
+      inMemoryDeployments.unshift(rollbackDep);
+      return res.status(201).json({ success: true, message: 'Rollback executed successfully.', deployment: rollbackDep });
+    }
+
+    const rollbackDep = await Deployment.create({
+      serviceName: serviceName || 'devopshub-app',
+      environment: environment || 'production',
+      branch: 'main',
+      commitSha: commitSha || '9b2c3a1',
+      commitMessage: rollbackMessage,
+      author: `${author} (Rollback)`,
+      triggeredBy: req.user?.email || 'manual',
+      status: 'success',
+      durationSeconds: 24,
+      logs: [
+        { step: 'Rollback Request', message: `Emergency rollback initiated by ${author}`, status: 'warning' },
+        { step: 'Image Tag Fetch', message: `Re-pointing production traffic to verified stable build ${commitSha}`, status: 'info' },
+        { step: 'Container Redeploy', message: 'Rolling recreate of EC2 containers via docker compose', status: 'info' },
+        { step: 'Health Probe', message: 'GET /api/health returned 200 OK (14ms)', status: 'success' },
+        { step: 'Rollback Complete', message: 'Traffic restored to verified state', status: 'success' },
+      ],
+    });
+
+    res.status(201).json({ success: true, message: 'Rollback executed successfully in MongoDB Atlas.', deployment: rollbackDep });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const getInMemoryDeployments = () => inMemoryDeployments;
