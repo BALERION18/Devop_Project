@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Activity, Lock, Mail, Eye, EyeOff, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
+import { Activity, Lock, Mail, Eye, EyeOff, ArrowRight, Loader2, AlertCircle, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useNotification } from '../context/NotificationContext.jsx';
 
@@ -224,7 +224,7 @@ export const Login = () => {
               try {
                 const res = await login('demo@devopshub.io', 'password123');
                 if (res.success) {
-                  addToast('Logged in via Demo Session!', 'success');
+                  addToast('Logged in as Demo Leader!', 'success');
                   navigate(from, { replace: true });
                 }
               } catch (err) {
@@ -234,10 +234,19 @@ export const Login = () => {
               }
             }}
             className="btn btn-secondary"
-            style={{ width: '100%', padding: '9px', fontSize: '0.8125rem' }}
+            style={{
+              width: '100%',
+              padding: '9px',
+              fontSize: '0.8125rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+            }}
             id="demo-login-button"
           >
-            <span>Explore as Demo Admin (1-Click)</span>
+            <Sparkles size={14} style={{ color: 'var(--accent-violet)' }} />
+            <span>Explore as Demo Leader (1-Click)</span>
           </button>
         </form>
 

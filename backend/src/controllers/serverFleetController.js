@@ -113,6 +113,20 @@ export const getFleet = async (req, res, next) => {
       fleet = await ServerNode.find({ teamId }).sort({ isCurrentHost: -1, createdAt: -1 });
     }
 
+    // If demo account and fleet is empty, initialize the high-fidelity demo sandbox fleet
+    if (fleet.length === 0 && (teamId === 'team_demo_leader' || req.user?.email === 'demo@devopshub.io')) {
+      const sandboxNodes = getSandboxAwsFleet('ap-south-1');
+      for (const nodeData of sandboxNodes) {
+        await ServerNode.create({
+          ...nodeData,
+          teamId,
+          userId: req.user?._id?.toString() || req.user?.id || 'demo_user_01',
+          createdBy: 'DevOpsHub Demo Sandbox',
+        });
+      }
+      fleet = await ServerNode.find({ teamId }).sort({ isCurrentHost: -1, createdAt: -1 });
+    }
+
     // Update live metrics on the active host instance if it belongs to this team
     const hostNode = fleet.find((n) => n.isCurrentHost);
     if (hostNode) {
