@@ -14,9 +14,20 @@ import {
   Clock,
   Layers,
   ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
   X,
   Play,
   RotateCcw,
+  Zap,
+  DollarSign,
+  Copy,
+  Check,
+  HelpCircle,
+  Power,
+  RefreshCw,
+  Sparkles,
+  Lock,
 } from 'lucide-react';
 import api from '../services/api.js';
 import { Header } from '../components/Header.jsx';
@@ -28,12 +39,45 @@ export const Servers = () => {
   const { addToast } = useNotification();
 
   const [viewMode, setViewMode] = useState('fleet'); // 'fleet' or 'host'
+  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'wasted', 'vulnerable', 'stopped'
   const [fleet, setFleet] = useState([]);
+  const [finops, setFinops] = useState(null);
+  const [security, setSecurity] = useState(null);
   const [hostStatus, setHostStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Add Server Modal
+  // AWS Connect Modal
+  const [isAwsModalOpen, setIsAwsModalOpen] = useState(false);
+  const [awsTab, setAwsTab] = useState('sandbox'); // 'sandbox' or 'iam'
+  const [awsForm, setAwsForm] = useState({
+    region: 'ap-south-1',
+    accessKeyId: '',
+    secretAccessKey: '',
+    sessionToken: '',
+  });
+  const [isSyncingAws, setIsSyncingAws] = useState(false);
+
+  // 1-Line Bash Agent Modal
+  const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
+  const [agentCurlCommand, setAgentCurlCommand] = useState('');
+  const [agentToken, setAgentToken] = useState('');
+  const [copiedAgent, setCopiedAgent] = useState(false);
+
+  // AI Diagnostic Modal
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [selectedAiNode, setSelectedAiNode] = useState(null);
+  const [aiDiagnosis, setAiDiagnosis] = useState(null);
+  const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [copiedAiScript, setCopiedAiScript] = useState(false);
+
+  // DevOpsHub vs Grafana Comparison Modal
+  const [isVsGrafanaOpen, setIsVsGrafanaOpen] = useState(false);
+
+  // Action Spinners (Instance Reboot / Stop / Start)
+  const [actionLoadingId, setActionLoadingId] = useState(null);
+
+  // Add Server Modal (Manual IP)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [addForm, setAddForm] = useState({
     name: '',
@@ -55,13 +99,12 @@ export const Servers = () => {
   const fetchData = async (isManual = false) => {
     if (isManual) setRefreshing(true);
     try {
-      const [fleetRes, hostRes] = await Promise.all([
-        api.get('/fleet'),
-        api.get('/server/status'),
-      ]);
+      const [fleetRes, hostRes] = await Promise.all([api.get('/fleet'), api.get('/server/status')]);
 
       if (fleetRes.data.success) {
         setFleet(fleetRes.data.fleet || []);
+        if (fleetRes.data.finops) setFinops(fleetRes.data.finops);
+        if (fleetRes.data.security) setSecurity(fleetRes.data.security);
       }
       if (hostRes.data.success) {
         setHostStatus(hostRes.data);
@@ -80,6 +123,99 @@ export const Servers = () => {
     const interval = setInterval(() => fetchData(false), 15000);
     return () => clearInterval(interval);
   }, []);
+
+  // Handle AWS Cloud Sync (Instant Sandbox or Real IAM Keys)
+  const handleAwsSync = async (modeOverride = null) => {
+    const mode = modeOverride || awsTab;
+    setIsSyncingAws(true);
+    try {
+      const payload =
+        mode === 'sandbox'
+          ? { mode: 'sandbox', region: awsForm.region }
+          : {
+              mode: 'credentials',
+              region: awsForm.region,
+              accessKeyId: awsForm.accessKeyId,
+              secretAccessKey: awsForm.secretAccessKey,
+              sessionToken: awsForm.sessionToken,
+            };
+
+      const res = await api.post('/fleet/aws/sync', payload);
+      if (res.data.success) {
+        addToast(res.data.message, 'success');
+        setIsAwsModalOpen(false);
+        fetchData(true);
+      }
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Failed to sync with AWS.', 'error');
+    } finally {
+      setIsSyncingAws(false);
+    }
+  };
+
+  // Open 1-Line Agent Modal & Fetch Token
+  const openAgentModal = async () => {
+    setIsAgentModalOpen(true);
+    setCopiedAgent(false);
+    try {
+      const res = await api.get('/fleet/agent/token');
+      if (res.data.success) {
+        setAgentCurlCommand(res.data.curlCommand);
+        setAgentToken(res.data.token);
+      }
+    } catch (err) {
+      const fallbackCmd = `curl -sSL "http://localhost:5000/api/fleet/install.sh" | bash`;
+      setAgentCurlCommand(fallbackCmd);
+    }
+  };
+
+  const copyToClipboard = (text, type = 'agent') => {
+    navigator.clipboard.writeText(text);
+    if (type === 'agent') {
+      setCopiedAgent(true);
+      setTimeout(() => setCopiedAgent(false), 2500);
+    } else {
+      setCopiedAiScript(true);
+      setTimeout(() => setCopiedAiScript(false), 2500);
+    }
+    addToast('Copied to clipboard!', 'info');
+  };
+
+  // 1-Click Remote EC2 Action (Reboot, Stop, Start)
+  const handleInstanceAction = async (node, action) => {
+    const id = node.instanceId || node._id;
+    setActionLoadingId(`${id}_${action}`);
+    try {
+      const res = await api.post(`/fleet/aws/action/${id}`, { action });
+      if (res.data.success) {
+        addToast(res.data.message, 'success');
+        fetchData();
+      }
+    } catch (err) {
+      addToast(err.response?.data?.message || `Failed to ${action} instance.`, 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Run AI Root-Cause Diagnostic
+  const handleRunAiDiagnosis = async (node) => {
+    setSelectedAiNode(node);
+    setIsAiModalOpen(true);
+    setIsLoadingAi(true);
+    setCopiedAiScript(false);
+    try {
+      const id = node.instanceId || node._id;
+      const res = await api.get(`/fleet/aws/ai-diagnose/${id}`);
+      if (res.data.success) {
+        setAiDiagnosis(res.data.diagnosis);
+      }
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Failed to generate AI diagnosis.', 'error');
+    } finally {
+      setIsLoadingAi(false);
+    }
+  };
 
   const handleAddServer = async (e) => {
     e.preventDefault();
@@ -151,22 +287,30 @@ export const Servers = () => {
     return `${m}m ${seconds % 60}s`;
   };
 
+  // Filter fleet based on selection
+  const filteredFleet = fleet.filter((server) => {
+    if (activeFilter === 'wasted') return server.isWastingCost;
+    if (activeFilter === 'vulnerable') return server.securityRisks && server.securityRisks.length > 0;
+    if (activeFilter === 'stopped') return server.state === 'stopped';
+    return true;
+  });
+
   const liveMetrics = hostStatus?.data?.metrics;
   const liveServer = hostStatus?.data?.server;
 
   return (
     <>
       <Header
-        title="Server Fleet & Infrastructure"
-        description="Manage multi-server fleets, EC2 compute nodes, and live host diagnostics"
-        breadcrumbs={['DevOpsHub', 'Infrastructure', 'Server Fleet']}
+        title="Server Fleet & AWS Cloud Manager"
+        description="Connect any AWS account or EC2 instance in 30 seconds with automated FinOps cost optimization and security auditing"
+        breadcrumbs={['DevOpsHub', 'Infrastructure', 'AWS Fleet']}
         onRefresh={() => fetchData(true)}
         isRefreshing={refreshing}
         setMobileOpen={setMobileOpen}
       />
 
       <div className="page-container">
-        {/* View Switcher & Action Bar */}
+        {/* Top Feature Callout Bar: Instant AWS Connect & Grafana Comparison */}
         <div
           style={{
             display: 'flex',
@@ -174,10 +318,216 @@ export const Servers = () => {
             justifyContent: 'space-between',
             gap: '16px',
             flexWrap: 'wrap',
-            marginBottom: '24px',
+            marginBottom: '20px',
+            padding: '16px 20px',
+            backgroundColor: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--border-subtle)',
+            background: 'linear-gradient(135deg, rgba(255, 153, 0, 0.05) 0%, rgba(99, 102, 241, 0.05) 100%)',
           }}
         >
-          {/* Tabs */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '10px',
+                backgroundColor: 'rgba(255, 153, 0, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#FF9900',
+                border: '1px solid rgba(255, 153, 0, 0.3)',
+              }}
+            >
+              <Zap size={22} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>Instant AWS Cloud Discovery</span>
+                <span
+                  style={{
+                    fontSize: '0.6875rem',
+                    padding: '2px 8px',
+                    borderRadius: '9999px',
+                    backgroundColor: 'rgba(255, 153, 0, 0.15)',
+                    color: '#FF9900',
+                    fontWeight: 600,
+                  }}
+                >
+                  Agentless &bull; 30 Seconds
+                </span>
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', margin: '2px 0 0 0' }}>
+                Connect any AWS account to import EC2 instances, live CloudWatch telemetry, cost wastage, and open security ports.
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setIsVsGrafanaOpen(true)}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <HelpCircle size={14} />
+              <span>Why Not Just Grafana?</span>
+            </button>
+
+            <button
+              onClick={openAgentModal}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Terminal size={14} />
+              <span>1-Line Bash Agent</span>
+            </button>
+
+            <button
+              onClick={() => setIsAwsModalOpen(true)}
+              className="btn"
+              style={{
+                fontSize: '0.8125rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: '#FF9900',
+                color: '#000000',
+                fontWeight: 600,
+                border: 'none',
+                boxShadow: '0 2px 10px rgba(255, 153, 0, 0.25)',
+              }}
+            >
+              <Zap size={15} fill="#000000" />
+              <span>Connect AWS Account</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Cloud FinOps & Security Intelligence Bar (What Grafana Cannot Do) */}
+        {finops && (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: '14px',
+              marginBottom: '24px',
+            }}
+          >
+            {/* Monthly Spend */}
+            <div className="hub-card" style={{ padding: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                  Projected AWS Spend
+                </span>
+                <DollarSign size={16} style={{ color: 'var(--accent-primary)' }} />
+              </div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                ${finops.totalMonthlyCost}
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}> / month</span>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Hourly burn: <span className="font-mono text-primary">${finops.totalHourlyBurn}/hr</span>
+              </div>
+            </div>
+
+            {/* Cost Wastage & Savings */}
+            <div
+              className="hub-card"
+              style={{
+                padding: '16px',
+                borderLeft: finops.wastedMonthlyCost > 0 ? '3px solid var(--warning)' : '1px solid var(--border-subtle)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--warning)', fontWeight: 600 }}>
+                  Potential Monthly Savings
+                </span>
+                <AlertTriangle size={16} style={{ color: 'var(--warning)' }} />
+              </div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--warning)' }}>
+                ${finops.potentialMonthlySavings}
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}> / month</span>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                {finops.wastedInstancesCount > 0
+                  ? `${finops.wastedInstancesCount} wasted/zombie nodes detected`
+                  : 'Zero compute waste detected'}
+              </div>
+            </div>
+
+            {/* Security Compliance Score */}
+            <div
+              className="hub-card"
+              style={{
+                padding: '16px',
+                borderLeft:
+                  security?.criticalVulnerabilities > 0
+                    ? '3px solid var(--error)'
+                    : '1px solid var(--border-subtle)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                  AWS Security Compliance
+                </span>
+                {security?.criticalVulnerabilities > 0 ? (
+                  <ShieldAlert size={16} style={{ color: 'var(--error)' }} />
+                ) : (
+                  <ShieldCheck size={16} style={{ color: 'var(--success)' }} />
+                )}
+              </div>
+              <div
+                style={{
+                  fontSize: '1.4rem',
+                  fontWeight: 700,
+                  color: security?.criticalVulnerabilities > 0 ? 'var(--error)' : 'var(--success)',
+                }}
+              >
+                {security?.averageSecurityScore || 95}%
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}> Safe</span>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                {security?.criticalVulnerabilities > 0 ? (
+                  <span style={{ color: 'var(--error)', fontWeight: 600 }}>
+                    {security.criticalVulnerabilities} Critical Port Exposures (SSH 0.0.0.0/0)
+                  </span>
+                ) : (
+                  'All security groups compliant'
+                )}
+              </div>
+            </div>
+
+            {/* Total Cloud Nodes */}
+            <div className="hub-card" style={{ padding: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                  Tracked Compute Fleet
+                </span>
+                <Server size={16} style={{ color: 'var(--accent-violet)' }} />
+              </div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {fleet.length} Nodes
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Across {new Set(fleet.map((s) => s.region)).size} region(s) &bull; CloudWatch Synced
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* View Switcher, Filter Tabs & Action Bar */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+            flexWrap: 'wrap',
+            marginBottom: '20px',
+          }}
+        >
+          {/* Main View Tabs */}
           <div
             style={{
               display: 'flex',
@@ -205,7 +555,7 @@ export const Servers = () => {
               }}
             >
               <Server size={14} />
-              <span>Fleet Overview ({fleet.length} Nodes)</span>
+              <span>Multi-Server Fleet ({fleet.length})</span>
             </button>
 
             <button
@@ -230,263 +580,1119 @@ export const Servers = () => {
             </button>
           </div>
 
+          {/* Quick Filters (All, Cost Waste, Security Alerts) */}
+          {viewMode === 'fleet' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setActiveFilter('all')}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.75rem',
+                  fontWeight: activeFilter === 'all' ? 600 : 500,
+                  backgroundColor: activeFilter === 'all' ? 'var(--bg-elevated)' : 'transparent',
+                  color: activeFilter === 'all' ? 'var(--text-primary)' : 'var(--text-muted)',
+                  border: '1px solid var(--border-subtle)',
+                  cursor: 'pointer',
+                }}
+              >
+                All Instances ({fleet.length})
+              </button>
+
+              <button
+                onClick={() => setActiveFilter('wasted')}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.75rem',
+                  fontWeight: activeFilter === 'wasted' ? 600 : 500,
+                  backgroundColor: activeFilter === 'wasted' ? 'rgba(245, 158, 11, 0.15)' : 'transparent',
+                  color: activeFilter === 'wasted' ? 'var(--warning)' : 'var(--text-muted)',
+                  border: activeFilter === 'wasted' ? '1px solid var(--warning)' : '1px solid var(--border-subtle)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <DollarSign size={12} />
+                <span>Cost Wastage ({fleet.filter((f) => f.isWastingCost).length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveFilter('vulnerable')}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.75rem',
+                  fontWeight: activeFilter === 'vulnerable' ? 600 : 500,
+                  backgroundColor: activeFilter === 'vulnerable' ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                  color: activeFilter === 'vulnerable' ? 'var(--error)' : 'var(--text-muted)',
+                  border: activeFilter === 'vulnerable' ? '1px solid var(--error)' : '1px solid var(--border-subtle)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <ShieldAlert size={12} />
+                <span>Security Alerts ({fleet.filter((f) => f.securityRisks?.length > 0).length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveFilter('stopped')}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.75rem',
+                  fontWeight: activeFilter === 'stopped' ? 600 : 500,
+                  backgroundColor: activeFilter === 'stopped' ? 'var(--bg-elevated)' : 'transparent',
+                  color: activeFilter === 'stopped' ? 'var(--text-primary)' : 'var(--text-muted)',
+                  border: '1px solid var(--border-subtle)',
+                  cursor: 'pointer',
+                }}
+              >
+                Stopped ({fleet.filter((f) => f.state === 'stopped').length})
+              </button>
+            </div>
+          )}
+
           {/* Action Buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               onClick={() => openDiagWith('uptime')}
               className="btn btn-secondary"
               style={{ fontSize: '0.8125rem' }}
             >
               <Terminal size={14} />
-              <span>Run Diagnostic Probe</span>
+              <span>Diagnostic Console</span>
             </button>
 
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="btn btn-primary"
+              className="btn btn-outline"
               style={{ fontSize: '0.8125rem' }}
             >
-              <Plus size={15} />
-              <span>Register New Server</span>
+              <Plus size={14} />
+              <span>Manual Add</span>
             </button>
           </div>
         </div>
 
         {viewMode === 'fleet' ? (
           /* ============================================================ */
-          /* FLEET GRID VIEW: MULTI-SERVER MANAGEMENT                     */
+          /* FLEET GRID VIEW: ENHANCED EC2 CARDS WITH ACTIONS & FINOPS    */
           /* ============================================================ */
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
               gap: '20px',
             }}
           >
-            {fleet.map((server) => (
+            {filteredFleet.length === 0 ? (
               <div
-                key={server._id || server.ipAddress}
                 className="hub-card"
                 style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '16px',
-                  borderLeft: server.isCurrentHost ? '3px solid var(--accent-violet)' : '1px solid var(--border-subtle)',
+                  gridColumn: '1 / -1',
+                  textAlign: 'center',
+                  padding: '48px 24px',
                 }}
               >
-                {/* Server Header */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>{server.name}</span>
-                      {server.isCurrentHost && (
-                        <span
-                          style={{
-                            fontSize: '0.6875rem',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            backgroundColor: 'var(--accent-subtle)',
-                            color: 'var(--accent-violet)',
-                            fontWeight: 600,
-                          }}
-                        >
-                          HOST
-                        </span>
-                      )}
-                    </div>
-                    <div className="font-mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {server.ipAddress} &bull; {server.provider} ({server.instanceType})
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span className="badge badge-success">Online</span>
-                    {!server.isCurrentHost && (
-                      <button
-                        onClick={() => handleDeleteServer(server._id, server.name)}
-                        className="btn-icon"
-                        title="Decommission Server"
-                        style={{ color: 'var(--text-muted)', padding: '4px' }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Resource Gauges */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {/* CPU */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '4px' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>CPU Load</span>
-                      <span className="font-mono" style={{ fontWeight: 600 }}>{server.cpuUsagePercent}%</span>
-                    </div>
-                    <div style={{ width: '100%', height: '5px', backgroundColor: 'var(--bg-elevated)', borderRadius: '9999px', overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          width: `${server.cpuUsagePercent}%`,
-                          height: '100%',
-                          backgroundColor: server.cpuUsagePercent > 75 ? 'var(--error)' : 'var(--accent-violet)',
-                          borderRadius: '9999px',
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* RAM */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '4px' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>RAM Allocation</span>
-                      <span className="font-mono" style={{ fontWeight: 600 }}>{server.memoryUsagePercent}%</span>
-                    </div>
-                    <div style={{ width: '100%', height: '5px', backgroundColor: 'var(--bg-elevated)', borderRadius: '9999px', overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          width: `${server.memoryUsagePercent}%`,
-                          height: '100%',
-                          backgroundColor: server.memoryUsagePercent > 80 ? 'var(--error)' : '#38BDF8',
-                          borderRadius: '9999px',
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Disk */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '4px' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Storage (Disk)</span>
-                      <span className="font-mono" style={{ fontWeight: 600 }}>{server.diskUsagePercent}%</span>
-                    </div>
-                    <div style={{ width: '100%', height: '5px', backgroundColor: 'var(--bg-elevated)', borderRadius: '9999px', overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          width: `${server.diskUsagePercent}%`,
-                          height: '100%',
-                          backgroundColor: 'var(--success)',
-                          borderRadius: '9999px',
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Footer details: Region, Uptime, Actions */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    borderTop: '1px solid var(--border-subtle)',
-                    paddingTop: '12px',
-                    fontSize: '0.75rem',
-                    color: 'var(--text-muted)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Globe size={13} />
-                    <span>{server.region}</span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span>Uptime: {formatUptime(server.uptimeSeconds)}</span>
-                    <button
-                      onClick={() => openDiagWith('df -h')}
-                      className="btn btn-outline"
-                      style={{ padding: '3px 8px', fontSize: '0.6875rem' }}
-                    >
-                      Inspect
-                    </button>
-                  </div>
-                </div>
+                <Server size={36} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
+                <h4 style={{ fontSize: '1rem', marginBottom: '6px' }}>No servers match your current filter</h4>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                  Clear the filter or connect your AWS account to import your cloud infrastructure.
+                </p>
+                <button onClick={() => setActiveFilter('all')} className="btn btn-secondary">
+                  Reset Filter
+                </button>
               </div>
-            ))}
+            ) : (
+              filteredFleet.map((server) => {
+                const hourlyCost = server.costPerHour || 0.0208;
+                const monthlyCost = server.monthlyEstimatedCost || (hourlyCost * 730).toFixed(2);
+                const isRebooting = actionLoadingId === `${server.instanceId || server._id}_reboot`;
+                const isTogglingState =
+                  actionLoadingId === `${server.instanceId || server._id}_stop` ||
+                  actionLoadingId === `${server.instanceId || server._id}_start`;
+
+                return (
+                  <div
+                    key={server._id || server.instanceId || server.ipAddress}
+                    className="hub-card"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '16px',
+                      borderLeft: server.isCurrentHost
+                        ? '3px solid var(--accent-violet)'
+                        : server.securityRisks?.some((r) => r.severity === 'critical')
+                        ? '3px solid var(--error)'
+                        : server.isWastingCost
+                        ? '3px solid var(--warning)'
+                        : '1px solid var(--border-subtle)',
+                      transition: 'transform var(--transition-fast), border-color var(--transition-fast)',
+                    }}
+                  >
+                    {/* Server Header */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 600, fontSize: '0.95rem', wordBreak: 'break-word' }}>
+                            {server.name}
+                          </span>
+                          {server.isCurrentHost && (
+                            <span
+                              style={{
+                                fontSize: '0.6875rem',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                backgroundColor: 'var(--accent-subtle)',
+                                color: 'var(--accent-violet)',
+                                fontWeight: 600,
+                              }}
+                            >
+                              LOCAL HOST
+                            </span>
+                          )}
+                          {server.connectionType === 'curl_bash_agent' && (
+                            <span
+                              style={{
+                                fontSize: '0.6875rem',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                                color: '#38BDF8',
+                                fontWeight: 600,
+                              }}
+                            >
+                              BASH AGENT
+                            </span>
+                          )}
+                        </div>
+
+                        <div
+                          className="font-mono"
+                          style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '3px' }}
+                        >
+                          {server.instanceId ? (
+                            <span style={{ color: 'var(--accent-primary)', marginRight: '6px' }}>
+                              {server.instanceId}
+                            </span>
+                          ) : null}
+                          {server.ipAddress} &bull; {server.provider} ({server.instanceType})
+                        </div>
+                      </div>
+
+                      {/* State Badge & Actions */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span
+                          className={`badge ${
+                            server.state === 'stopped'
+                              ? 'badge-neutral'
+                              : server.status === 'degraded'
+                              ? 'badge-warning'
+                              : 'badge-success'
+                          }`}
+                        >
+                          {server.state ? server.state.toUpperCase() : 'ONLINE'}
+                        </span>
+
+                        {!server.isCurrentHost && (
+                          <button
+                            onClick={() => handleDeleteServer(server._id, server.name)}
+                            className="btn-icon"
+                            title="Decommission Server"
+                            style={{ color: 'var(--text-muted)', padding: '4px' }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* FinOps Cost & Region Metadata */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        backgroundColor: 'var(--bg-elevated)',
+                        borderRadius: 'var(--radius-sm)',
+                        fontSize: '0.75rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                        <Globe size={13} style={{ color: 'var(--text-muted)' }} />
+                        <span>{server.region}</span>
+                        {server.availabilityZone && (
+                          <span style={{ color: 'var(--text-muted)' }}>({server.availabilityZone})</span>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <DollarSign size={13} style={{ color: 'var(--success)' }} />
+                        <span className="font-mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                          ${monthlyCost}
+                          <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>/mo</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Cost Wastage Alert Box (If Applicable) */}
+                    {server.isWastingCost && (
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                          border: '1px solid rgba(245, 158, 11, 0.25)',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: '0.75rem',
+                          color: 'var(--warning)',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                        }}
+                      >
+                        <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+                        <div>
+                          <strong>Cloud Waste Detected:</strong> {server.costWastageReason}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Critical Security Alert Box (If Exposed Port 22 or DB) */}
+                    {server.securityRisks?.length > 0 && (
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                          border: '1px solid rgba(239, 68, 68, 0.25)',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: '0.75rem',
+                          color: 'var(--error)',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                        }}
+                      >
+                        <ShieldAlert size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+                        <div>
+                          <strong>Security Hole:</strong> {server.securityRisks[0].description}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Resource Gauges (CPU, RAM, Disk) */}
+                    {server.state !== 'stopped' ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {/* CPU */}
+                        <div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              fontSize: '0.75rem',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            <span style={{ color: 'var(--text-secondary)' }}>CPU Load</span>
+                            <span className="font-mono" style={{ fontWeight: 600 }}>
+                              {server.cpuUsagePercent}%
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              width: '100%',
+                              height: '5px',
+                              backgroundColor: 'var(--bg-elevated)',
+                              borderRadius: '9999px',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${server.cpuUsagePercent}%`,
+                                height: '100%',
+                                backgroundColor:
+                                  server.cpuUsagePercent > 75 ? 'var(--error)' : 'var(--accent-violet)',
+                                borderRadius: '9999px',
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* RAM */}
+                        <div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              fontSize: '0.75rem',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            <span style={{ color: 'var(--text-secondary)' }}>RAM Allocation</span>
+                            <span className="font-mono" style={{ fontWeight: 600 }}>
+                              {server.memoryUsagePercent}%
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              width: '100%',
+                              height: '5px',
+                              backgroundColor: 'var(--bg-elevated)',
+                              borderRadius: '9999px',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${server.memoryUsagePercent}%`,
+                                height: '100%',
+                                backgroundColor: server.memoryUsagePercent > 80 ? 'var(--error)' : '#38BDF8',
+                                borderRadius: '9999px',
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Disk */}
+                        <div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              fontSize: '0.75rem',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            <span style={{ color: 'var(--text-secondary)' }}>Disk Utilization</span>
+                            <span className="font-mono" style={{ fontWeight: 600 }}>
+                              {server.diskUsagePercent}%
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              width: '100%',
+                              height: '5px',
+                              backgroundColor: 'var(--bg-elevated)',
+                              borderRadius: '9999px',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${server.diskUsagePercent}%`,
+                                height: '100%',
+                                backgroundColor: server.diskUsagePercent > 85 ? 'var(--error)' : 'var(--success)',
+                                borderRadius: '9999px',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          padding: '20px',
+                          textAlign: 'center',
+                          backgroundColor: 'var(--bg-elevated)',
+                          borderRadius: 'var(--radius-sm)',
+                          color: 'var(--text-muted)',
+                          fontSize: '0.8125rem',
+                        }}
+                      >
+                        Compute instance is stopped. CPU/RAM meters suspended.
+                      </div>
+                    )}
+
+                    {/* Action Hub (Reboot, Stop/Start, AI Diagnose) */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        paddingTop: '8px',
+                        borderTop: '1px solid var(--border-subtle)',
+                      }}
+                    >
+                      <button
+                        onClick={() => handleRunAiDiagnosis(server)}
+                        className="btn btn-secondary"
+                        style={{
+                          fontSize: '0.75rem',
+                          padding: '5px 10px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                          color: 'var(--accent-primary)',
+                          border: '1px solid rgba(99, 102, 241, 0.3)',
+                        }}
+                      >
+                        <Sparkles size={13} />
+                        <span>AI Diagnose</span>
+                      </button>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {server.state === 'stopped' ? (
+                          <button
+                            onClick={() => handleInstanceAction(server, 'start')}
+                            disabled={isTogglingState}
+                            className="btn btn-outline"
+                            style={{
+                              fontSize: '0.75rem',
+                              padding: '5px 10px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              color: 'var(--success)',
+                            }}
+                          >
+                            <Power size={12} />
+                            <span>{isTogglingState ? 'Starting...' : 'Start'}</span>
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleInstanceAction(server, 'reboot')}
+                              disabled={isRebooting}
+                              className="btn btn-outline"
+                              style={{
+                                fontSize: '0.75rem',
+                                padding: '5px 10px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                              }}
+                            >
+                              <RotateCcw size={12} className={isRebooting ? 'spin-animation' : ''} />
+                              <span>{isRebooting ? 'Rebooting...' : 'Reboot'}</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleInstanceAction(server, 'stop')}
+                              disabled={isTogglingState}
+                              className="btn btn-outline"
+                              style={{
+                                fontSize: '0.75rem',
+                                padding: '5px 8px',
+                                color: 'var(--error)',
+                              }}
+                              title="Stop Instance"
+                            >
+                              <Power size={12} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         ) : (
           /* ============================================================ */
-          /* HOST TELEMETRY: CURRENT INSTANCE DEEP DIVE                   */
+          /* HOST TELEMETRY VIEW: BARE METAL / CONTAINER HOST             */
           /* ============================================================ */
-          <div>
-            <div
-              className="hub-card"
-              style={{
-                backgroundColor: 'var(--bg-elevated)',
-                marginBottom: '20px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '12px',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <CheckCircle2 size={22} style={{ color: 'var(--success)' }} />
-                <div>
-                  <div style={{ fontWeight: 600 }}>AWS EC2 Instance Online & Serving Traffic</div>
-                  <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                    Public IPv4: <strong>13.232.254.140</strong> &bull; Node.js {liveMetrics?.process?.nodeVersion || 'v22'} &bull; Docker Container
-                  </div>
-                </div>
-              </div>
-
-              <a
-                href="http://13.232.254.140/api/health"
-                target="_blank"
-                rel="noreferrer"
-                className="btn btn-outline"
-                style={{ fontSize: '0.8125rem' }}
-              >
-                /api/health Probe
-              </a>
-            </div>
-
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                gap: '20px',
-                marginBottom: '24px',
+                gap: '16px',
               }}
             >
               <MetricCard
-                title="Real CPU Utilization"
-                value={`${liveMetrics?.cpu?.usagePercent ?? 0}%`}
-                subtitle="Sampled via delta clock ticks across all cores"
+                title="Processor Telemetry"
+                value={`${liveMetrics?.cpu?.usagePercent || 0}%`}
                 icon={Cpu}
-                percent={liveMetrics?.cpu?.usagePercent || 0}
-                accentColor="var(--accent-violet)"
+                trend={{ value: `${liveMetrics?.cpu?.cores || 1} Virtual Cores Active`, isPositive: true }}
               />
-
               <MetricCard
-                title="RAM Usage"
-                value={`${liveMetrics?.memory?.usagePercent ?? 0}%`}
-                subtitle={`Used: ${liveMetrics?.memory?.usedGB || 0.4} GB / Total: ${liveMetrics?.memory?.totalGB || 0.9} GB`}
+                title="System RAM Utilization"
+                value={`${liveMetrics?.memory?.usagePercent || 0}%`}
                 icon={Activity}
-                percent={liveMetrics?.memory?.usagePercent || 0}
-                accentColor="#38BDF8"
+                trend={{
+                  value: `${liveMetrics?.memory?.usedGB || '0'} GB of ${liveMetrics?.memory?.totalGB || '0'} GB`,
+                  isPositive: (liveMetrics?.memory?.usagePercent || 0) < 85,
+                }}
               />
-
               <MetricCard
-                title="Disk Usage"
-                value={liveMetrics?.disk?.available ? `${liveMetrics.disk.usagePercent}%` : '31%'}
-                subtitle={`Mount: ${liveMetrics?.disk?.mountPoint || '/'}`}
+                title="Root Filesystem Storage"
+                value={liveMetrics?.disk?.available ? `${liveMetrics?.disk?.usagePercent}%` : 'Container Isolation'}
                 icon={HardDrive}
-                percent={liveMetrics?.disk?.available ? liveMetrics.disk.usagePercent : 31}
-                accentColor="var(--success)"
+                trend={{
+                  value: liveMetrics?.disk?.available
+                    ? `${liveMetrics?.disk?.usedGB} GB of ${liveMetrics?.disk?.totalGB} GB`
+                    : 'Stateless Volume Overlay',
+                  isPositive: true,
+                }}
               />
+            </div>
+
+            {/* Host Metadata Card */}
+            <div className="hub-card">
+              <h3 style={{ fontSize: '1rem', marginBottom: '16px' }}>Active Host Environment Specifications</h3>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                  gap: '16px',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Hostname</div>
+                  <div className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 600, marginTop: '2px' }}>
+                    {liveServer?.hostname || 'Unknown Host'}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OS Platform & Architecture</div>
+                  <div className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 600, marginTop: '2px' }}>
+                    {liveServer?.platform} ({liveServer?.arch})
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Process Uptime</div>
+                  <div className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 600, marginTop: '2px' }}>
+                    {formatUptime(liveServer?.uptimeSeconds)}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Container Environment</div>
+                  <div className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 600, marginTop: '2px' }}>
+                    {liveServer?.isContainer ? 'Docker Container' : 'Direct Host OS'}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Register Server Modal */}
-      {isAddModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsAddModalOpen(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+      {/* ============================================================ */}
+      {/* MODAL 1: AWS CLOUD AUTO-DISCOVERY (SANDBOX OR IAM KEYS)     */}
+      {/* ============================================================ */}
+      {isAwsModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsAwsModalOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '580px' }}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Server size={18} style={{ color: 'var(--accent-violet)' }} />
-                <h3 style={{ fontSize: '1.05rem', margin: 0 }}>Register New Server / Node</h3>
+                <div
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '8px',
+                    backgroundColor: 'rgba(255, 153, 0, 0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#FF9900',
+                  }}
+                >
+                  <Zap size={18} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.05rem', margin: 0 }}>Connect AWS Cloud Infrastructure</h3>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    Agentless auto-discovery of EC2 compute, CloudWatch telemetry, and FinOps costs
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => setIsAwsModalOpen(false)} className="btn-icon">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Tabs: Instant Sandbox vs IAM Credentials */}
+            <div
+              style={{
+                display: 'flex',
+                borderBottom: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--bg-elevated)',
+                padding: '0 20px',
+              }}
+            >
+              <button
+                onClick={() => setAwsTab('sandbox')}
+                style={{
+                  padding: '12px 16px',
+                  fontSize: '0.8125rem',
+                  fontWeight: awsTab === 'sandbox' ? 600 : 500,
+                  color: awsTab === 'sandbox' ? '#FF9900' : 'var(--text-secondary)',
+                  borderBottom: awsTab === 'sandbox' ? '2px solid #FF9900' : '2px solid transparent',
+                  background: 'none',
+                  borderTop: 'none',
+                  borderLeft: 'none',
+                  borderRight: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Sparkles size={14} />
+                <span>Instant 1-Click Sandbox (Zero-Credentials)</span>
+              </button>
+
+              <button
+                onClick={() => setAwsTab('iam')}
+                style={{
+                  padding: '12px 16px',
+                  fontSize: '0.8125rem',
+                  fontWeight: awsTab === 'iam' ? 600 : 500,
+                  color: awsTab === 'iam' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  borderBottom: awsTab === 'iam' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                  background: 'none',
+                  borderTop: 'none',
+                  borderLeft: 'none',
+                  borderRight: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Lock size={14} />
+                <span>Real AWS IAM Keys</span>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {awsTab === 'sandbox' ? (
+                <div>
+                  <div
+                    style={{
+                      padding: '14px',
+                      backgroundColor: 'rgba(255, 153, 0, 0.08)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid rgba(255, 153, 0, 0.25)',
+                      marginBottom: '18px',
+                      fontSize: '0.8125rem',
+                      lineHeight: '1.5',
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    <strong style={{ color: '#FF9900' }}>Zero Configuration Testing:</strong>
+                    <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)' }}>
+                      No active AWS credit card or credentials required! Instantly connects you to a high-fidelity
+                      simulated AWS Production Environment with:
+                    </p>
+                    <ul style={{ margin: '8px 0 0 18px', color: 'var(--text-secondary)' }}>
+                      <li>5 Realistic EC2 Instances (Web Gateway, Node API, Database, Bastion)</li>
+                      <li>Live CloudWatch CPU, Network In/Out, and Status Checks</li>
+                      <li>FinOps Cost Wastage: 1 Zombie Stopped Instance + 1 Oversized Compute Node</li>
+                      <li>Security Audit: Port 22 SSH open to 0.0.0.0/0 exposure alert</li>
+                    </ul>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Select AWS Target Region</label>
+                    <select
+                      className="form-input"
+                      value={awsForm.region}
+                      onChange={(e) => setAwsForm({ ...awsForm, region: e.target.value })}
+                    >
+                      <option value="ap-south-1">ap-south-1 (Asia Pacific - Mumbai)</option>
+                      <option value="us-east-1">us-east-1 (US East - N. Virginia)</option>
+                      <option value="us-west-2">us-west-2 (US West - Oregon)</option>
+                      <option value="eu-central-1">eu-central-1 (Europe - Frankfurt)</option>
+                      <option value="eu-west-1">eu-west-1 (Europe - Ireland)</option>
+                      <option value="ap-southeast-1">ap-southeast-1 (Asia Pacific - Singapore)</option>
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div
+                    style={{
+                      padding: '12px 14px',
+                      backgroundColor: 'var(--bg-elevated)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-subtle)',
+                      marginBottom: '16px',
+                      fontSize: '0.75rem',
+                      color: 'var(--text-secondary)',
+                      lineHeight: '1.5',
+                    }}
+                  >
+                    <strong>Security Notice:</strong> Only read-only IAM permissions (
+                    <code className="font-mono">AmazonEC2ReadOnlyAccess</code>,{' '}
+                    <code className="font-mono">CloudWatchReadOnlyAccess</code>) are required. Your credentials are used
+                    strictly to query AWS APIs in-memory and are never stored on disk.
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">AWS Region</label>
+                    <select
+                      className="form-input"
+                      value={awsForm.region}
+                      onChange={(e) => setAwsForm({ ...awsForm, region: e.target.value })}
+                    >
+                      <option value="ap-south-1">ap-south-1 (Asia Pacific - Mumbai)</option>
+                      <option value="us-east-1">us-east-1 (US East - N. Virginia)</option>
+                      <option value="us-west-2">us-west-2 (US West - Oregon)</option>
+                      <option value="eu-central-1">eu-central-1 (Europe - Frankfurt)</option>
+                      <option value="eu-west-1">eu-west-1 (Europe - Ireland)</option>
+                      <option value="ap-southeast-1">ap-southeast-1 (Asia Pacific - Singapore)</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">AWS Access Key ID</label>
+                    <input
+                      type="text"
+                      className="form-input font-mono"
+                      placeholder="AKIAIOSFODNN7EXAMPLE"
+                      value={awsForm.accessKeyId}
+                      onChange={(e) => setAwsForm({ ...awsForm, accessKeyId: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">AWS Secret Access Key</label>
+                    <input
+                      type="password"
+                      className="form-input font-mono"
+                      placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                      value={awsForm.secretAccessKey}
+                      onChange={(e) => setAwsForm({ ...awsForm, secretAccessKey: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">AWS Session Token (Optional / STS)</label>
+                    <input
+                      type="password"
+                      className="form-input font-mono"
+                      placeholder="Optional temporary STS session token"
+                      value={awsForm.sessionToken}
+                      onChange={(e) => setAwsForm({ ...awsForm, sessionToken: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" onClick={() => setIsAwsModalOpen(false)} className="btn btn-outline">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAwsSync()}
+                className="btn"
+                disabled={isSyncingAws}
+                style={{
+                  backgroundColor: '#FF9900',
+                  color: '#000000',
+                  fontWeight: 600,
+                  border: 'none',
+                }}
+              >
+                <Zap size={14} fill="#000000" />
+                <span>
+                  {isSyncingAws
+                    ? 'Connecting to AWS...'
+                    : awsTab === 'sandbox'
+                    ? 'Launch Instant AWS Sandbox'
+                    : 'Discover & Sync Live EC2 Fleet'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL 2: 1-LINE BASH AGENT (CONNECT ANY LINUX HOST / VPS)   */}
+      {/* ============================================================ */}
+      {isAgentModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsAgentModalOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '620px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Terminal size={18} style={{ color: 'var(--accent-primary)' }} />
+                <h3 style={{ fontSize: '1.05rem', margin: 0 }}>Universal 1-Line Server Agent</h3>
+              </div>
+              <button onClick={() => setIsAgentModalOpen(false)} className="btn-icon">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                Connect any running EC2 instance, Ubuntu/Debian server, or bare-metal VPS in <strong>5 seconds</strong>.
+                Requires zero dependencies (no Prometheus, no Python, no Node.js required on the server).
+              </p>
+
+              <div className="form-group">
+                <label className="form-label">Copy & Run in Your Server Terminal:</label>
+                <div
+                  style={{
+                    backgroundColor: '#050507',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '14px',
+                    fontFamily: 'monospace',
+                    fontSize: '0.8125rem',
+                    color: '#A1A1AA',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  <span style={{ color: '#FAFAFA' }}>{agentCurlCommand}</span>
+                  <button
+                    onClick={() => copyToClipboard(agentCurlCommand, 'agent')}
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.75rem', padding: '6px 12px', flexShrink: 0 }}
+                  >
+                    {copiedAgent ? <Check size={14} style={{ color: 'var(--success)' }} /> : <Copy size={14} />}
+                    <span>{copiedAgent ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  padding: '12px 14px',
+                  backgroundColor: 'var(--bg-elevated)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.75rem',
+                  color: 'var(--text-secondary)',
+                  lineHeight: '1.5',
+                }}
+              >
+                <strong>How it works:</strong> The script reads CPU, RAM, and Disk directly from{' '}
+                <code className="font-mono">/proc</code> and streams real-time telemetry back to DevOpsHub. Once
+                started, your server will automatically appear in the fleet view!
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button onClick={() => setIsAgentModalOpen(false)} className="btn btn-primary">
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL 3: AI ROOT-CAUSE DIAGNOSIS & REMEDIATION               */}
+      {/* ============================================================ */}
+      {isAiModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsAiModalOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Sparkles size={18} style={{ color: 'var(--accent-primary)' }} />
+                <h3 style={{ fontSize: '1.05rem', margin: 0 }}>
+                  AI DevOps Incident Diagnosis &bull; {selectedAiNode?.name}
+                </h3>
+              </div>
+              <button onClick={() => setIsAiModalOpen(false)} className="btn-icon">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {isLoadingAi ? (
+                <div style={{ textAlign: 'center', padding: '36px 0', color: 'var(--text-secondary)' }}>
+                  <RotateCcw size={24} className="spin-animation" style={{ marginBottom: '10px' }} />
+                  <div>Synthesizing CloudWatch metrics, process trees, and security group logs...</div>
+                </div>
+              ) : aiDiagnosis ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Severity Banner */}
+                  <div
+                    style={{
+                      padding: '12px 16px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor:
+                        aiDiagnosis.severity === 'critical'
+                          ? 'rgba(239, 68, 68, 0.12)'
+                          : aiDiagnosis.severity === 'high'
+                          ? 'rgba(245, 158, 11, 0.12)'
+                          : 'rgba(16, 185, 129, 0.12)',
+                      border:
+                        aiDiagnosis.severity === 'critical'
+                          ? '1px solid var(--error)'
+                          : aiDiagnosis.severity === 'high'
+                          ? '1px solid var(--warning)'
+                          : '1px solid var(--success)',
+                      color:
+                        aiDiagnosis.severity === 'critical'
+                          ? 'var(--error)'
+                          : aiDiagnosis.severity === 'high'
+                          ? 'var(--warning)'
+                          : 'var(--success)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                    }}
+                  >
+                    <AlertTriangle size={18} />
+                    <div>
+                      <strong style={{ textTransform: 'uppercase', fontSize: '0.75rem', display: 'block' }}>
+                        Severity: {aiDiagnosis.severity}
+                      </strong>
+                      <span style={{ fontSize: '0.875rem' }}>{aiDiagnosis.summary}</span>
+                    </div>
+                  </div>
+
+                  {/* Actionable Remediation Steps */}
+                  <div>
+                    <h4 style={{ fontSize: '0.875rem', marginBottom: '8px' }}>Recommended Remediation Steps:</h4>
+                    <ul style={{ margin: '0 0 0 20px', fontSize: '0.8125rem', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
+                      {aiDiagnosis.actionableSteps?.map((step, idx) => (
+                        <li key={idx}>{step}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* 1-Click Fix Bash Script */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        Automated Self-Healing Script
+                      </span>
+                      <button
+                        onClick={() => copyToClipboard(aiDiagnosis.fixScript, 'ai')}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.6875rem', padding: '3px 8px' }}
+                      >
+                        {copiedAiScript ? <Check size={12} style={{ color: 'var(--success)' }} /> : <Copy size={12} />}
+                        <span>{copiedAiScript ? 'Copied' : 'Copy Script'}</span>
+                      </button>
+                    </div>
+
+                    <pre
+                      style={{
+                        backgroundColor: '#050507',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '12px',
+                        fontFamily: 'monospace',
+                        fontSize: '0.75rem',
+                        color: '#A1A1AA',
+                        overflowX: 'auto',
+                        maxHeight: '180px',
+                      }}
+                    >
+                      {aiDiagnosis.fixScript}
+                    </pre>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="modal-footer">
+              <button onClick={() => setIsAiModalOpen(false)} className="btn btn-secondary">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* MODAL 4: WHY DEVOPSHUB VS GRAFANA (PROJECT UNIQUENESS)      */}
+      {/* ============================================================ */}
+      {isVsGrafanaOpen && (
+        <div className="modal-overlay" onClick={() => setIsVsGrafanaOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '720px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <HelpCircle size={18} style={{ color: 'var(--accent-primary)' }} />
+                <h3 style={{ fontSize: '1.05rem', margin: 0 }}>Why DevOpsHub vs Grafana + Prometheus?</h3>
+              </div>
+              <button onClick={() => setIsVsGrafanaOpen(false)} className="btn-icon">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: '1.5' }}>
+                Grafana is an incredible time-series graphing utility, but it is purely <strong>passive observation</strong>.
+                DevOpsHub is built as an <strong>Actionable DevOps Autopilot</strong> combining automated cloud onboarding,
+                FinOps bill reduction, and security enforcement:
+              </p>
+
+              <div style={{ overflowX: 'auto' }}>
+                <table className="hub-table" style={{ fontSize: '0.8125rem' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: '30%' }}>Capability</th>
+                      <th style={{ width: '35%', color: 'var(--text-muted)' }}>Grafana + Prometheus</th>
+                      <th style={{ width: '35%', color: 'var(--accent-primary)', fontWeight: 600 }}>DevOpsHub Dashboard</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>Setup & Onboarding</strong></td>
+                      <td>2-4 Hours (Install Prometheus, node_exporter, YAML scrape config)</td>
+                      <td style={{ color: 'var(--success)' }}><strong>30 Seconds</strong> (1-Click AWS Sync or 1-line curl)</td>
+                    </tr>
+                    <tr>
+                      <td><strong>AWS Cloud Auto-Discovery</strong></td>
+                      <td>Requires custom exporters & manual dashboard imports</td>
+                      <td style={{ color: 'var(--success)' }}><strong>Automatic</strong> (Direct EC2 & CloudWatch pull)</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Actionable EC2 Controls</strong></td>
+                      <td>Read-only (Cannot reboot or stop instances)</td>
+                      <td style={{ color: 'var(--success)' }}><strong>1-Click Reboot, Stop & Start</strong> with Audit Trail</td>
+                    </tr>
+                    <tr>
+                      <td><strong>FinOps & Cloud Cost Wastage</strong></td>
+                      <td>None (Blind to AWS monthly billing)</td>
+                      <td style={{ color: 'var(--success)' }}><strong>Calculates Burn Rate & detects Zombie stopped nodes</strong></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Security Group Auditing</strong></td>
+                      <td>None (Does not inspect network firewalls)</td>
+                      <td style={{ color: 'var(--success)' }}><strong>Flags open Port 22/DB to 0.0.0.0/0 immediately</strong></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Incident Diagnostics</strong></td>
+                      <td>Raw alert emails with threshold triggers</td>
+                      <td style={{ color: 'var(--success)' }}><strong>AI Root-Cause Analysis & copyable self-healing scripts</strong></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button onClick={() => setIsVsGrafanaOpen(false)} className="btn btn-primary">
+                Got It
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Add Server Modal */}
+      {isAddModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsAddModalOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Server size={18} style={{ color: 'var(--accent-primary)' }} />
+                <h3 style={{ fontSize: '1.05rem', margin: 0 }}>Register New Compute Node</h3>
               </div>
               <button onClick={() => setIsAddModalOpen(false)} className="btn-icon">
                 <X size={18} />
@@ -549,7 +1755,7 @@ export const Servers = () => {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div className="form-group">
-                    <label className="form-label">AWS Region</label>
+                    <label className="form-label">Region</label>
                     <input
                       type="text"
                       className="form-input"
@@ -585,18 +1791,10 @@ export const Servers = () => {
               </div>
 
               <div className="modal-footer">
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="btn btn-outline"
-                >
+                <button type="button" onClick={() => setIsAddModalOpen(false)} className="btn btn-outline">
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={isAdding}
-                >
+                <button type="submit" className="btn btn-primary" disabled={isAdding}>
                   <Plus size={14} />
                   <span>{isAdding ? 'Registering...' : 'Add Server Node'}</span>
                 </button>
@@ -675,11 +1873,7 @@ export const Servers = () => {
                 <RotateCcw size={13} />
                 <span>Re-run Command</span>
               </button>
-              <button
-                onClick={() => setIsDiagModalOpen(false)}
-                className="btn btn-secondary"
-                style={{ fontSize: '0.8125rem' }}
-              >
+              <button onClick={() => setIsDiagModalOpen(false)} className="btn btn-secondary" style={{ fontSize: '0.8125rem' }}>
                 Close
               </button>
             </div>

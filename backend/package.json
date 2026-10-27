@@ -21,6 +21,8 @@
   "author": "DevOpsHub Team",
   "license": "MIT",
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1157.0",
+    "@aws-sdk/client-ec2": "^3.1157.0",
     "axios": "^1.7.9",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",

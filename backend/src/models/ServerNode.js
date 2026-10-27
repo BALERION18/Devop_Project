@@ -59,6 +59,76 @@ const serverNodeSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    instanceId: {
+      type: String,
+      default: '',
+    },
+    privateIp: {
+      type: String,
+      default: '',
+    },
+    availabilityZone: {
+      type: String,
+      default: '',
+    },
+    state: {
+      type: String,
+      enum: ['running', 'stopped', 'pending', 'shutting-down', 'terminated'],
+      default: 'running',
+    },
+    costPerHour: {
+      type: Number,
+      default: 0.0104, // Default t3.micro price
+    },
+    monthlyEstimatedCost: {
+      type: Number,
+      default: 7.5,
+    },
+    isWastingCost: {
+      type: Boolean,
+      default: false,
+    },
+    costWastageReason: {
+      type: String,
+      default: '',
+    },
+    securityRisks: [
+      {
+        port: Number,
+        protocol: String,
+        severity: {
+          type: String,
+          enum: ['critical', 'high', 'medium', 'low', 'info'],
+          default: 'medium',
+        },
+        description: String,
+      },
+    ],
+    securityScore: {
+      type: Number,
+      default: 95,
+      min: 0,
+      max: 100,
+    },
+    agentToken: {
+      type: String,
+      default: '',
+      index: true,
+    },
+    lastHeartbeat: {
+      type: Date,
+      default: null,
+    },
+    connectionType: {
+      type: String,
+      enum: ['aws_cloudwatch_iam', 'curl_bash_agent', 'manual_ip', 'local_host'],
+      default: 'manual_ip',
+    },
+    cloudWatchMetrics: {
+      networkInBytes: { type: Number, default: 0 },
+      networkOutBytes: { type: Number, default: 0 },
+      statusCheckFailed: { type: Number, default: 0 },
+    },
     tags: [String],
     createdBy: {
       type: String,

@@ -53,13 +53,13 @@ graph TD
    - Live GitHub Actions API sync via secure backend endpoints (tokens never exposed to frontend).
    - Interactive "Trigger Deployment" modal with asynchronous pipeline simulation.
 
-4. **EC2 Server Status & Host Telemetry (Feature Tab 2)**:
-   - Non-fabricated CPU calculation using delta tick sampling across physical/virtual cores.
-   - Real RAM utilization tracking (used GB vs total GB vs percentage).
-   - Primary disk usage probe with graceful handling of isolated container boundaries.
-   - Clear distinction indicator between Docker Container vs Bare-Metal Host execution.
-   - System properties: Hostname, OS platform, architecture, process uptime, and load averages.
-   - Public `/api/health` probe for AWS Application Load Balancers and uptime monitors.
+4. **AWS Fleet & Cloud Manager (Feature Tab 2 — Project Uniqueness vs Grafana)**:
+   - **Zero-Friction AWS Onboarding**: Connect any AWS account in 30 seconds via read-only IAM keys or 1-Click Instant Demo Sandbox (auto-discovers EC2 instances across regions with live CloudWatch telemetry).
+   - **1-Line Universal Bash Agent**: Connect any existing Linux machine or EC2 in 5 seconds via `curl -sSL ... | bash` (zero dependencies, reads `/proc`, streams to `/api/fleet/heartbeat`).
+   - **Cloud FinOps & Bill Wastage Scanner**: Calculates real-time hourly burn rates and monthly projected spend ($); flags **Zombie stopped instances** still paying for EBS volumes and **idle oversized nodes** (<5% CPU) with exact dollar savings.
+   - **Security Group Vulnerability Auditor**: Inspects firewalls and raises alerts if Port 22 (SSH) or database ports (MongoDB 27017, MySQL 3306) are open to `0.0.0.0/0`.
+   - **1-Click Remote EC2 Operations**: Directly **Reboot, Stop, and Start** EC2 compute instances with full audit logging (features Grafana's read-only charts cannot perform).
+   - **AI DevOps Root-Cause & Self-Healing Diagnoser**: Analyzes CPU saturation, memory leaks, and status check failures, generating an incident report and a copy-pasteable bash self-healing script.
 
 5. **Security & Authentication**:
    - Signup, Login, and Logout flows with bcrypt password hashing (10 salt rounds).

@@ -23,7 +23,7 @@ export const Sidebar = ({ isCollapsed, setIsCollapsed, mobileOpen, setMobileOpen
   const navItems = [
     { name: 'Overview', to: '/', icon: LayoutDashboard },
     { name: 'Deployment Manager', to: '/deployments', icon: Rocket },
-    { name: 'Server Fleet & EC2', to: '/servers', icon: Server },
+    { name: 'AWS Fleet & FinOps', to: '/servers', icon: Server },
     { name: 'Uptime Monitors', to: '/monitors', icon: Globe },
     { name: 'Team & Access Control', to: '/team', icon: Users },
     { name: 'Settings', to: '/settings', icon: Settings },

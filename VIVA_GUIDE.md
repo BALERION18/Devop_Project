@@ -63,6 +63,16 @@ This document is prepared to help you confidently present and defend **DevOpsHub
 > 2. *Configure a centralized Prometheus server to scrape telemetry time-series data.*
 > 3. *Have the DevOpsHub backend query Prometheus PromQL APIs or render Grafana dashboards for high-throughput visualization."*
 
+### Q6 (Crucial): Why did you build this when Grafana already exists? What makes DevOpsHub unique?
+**Answer:**
+> *"Grafana is strictly a passive time-series charting tool that requires hours of manual setup (installing Prometheus, configuring node_exporter on every server, editing YAML scrape jobs, and opening firewall ports). DevOpsHub is an **Actionable DevOps Autopilot** with capabilities Grafana cannot do:*
+> 1. ***Zero-Friction 30-Second Onboarding**: Anyone can connect their AWS account in 30 seconds (or test with our 1-Click Instant Demo Sandbox) using read-only IAM keys to auto-discover all EC2 instances across regions, or run our 1-line curl agent (`curl -sSL ... | bash`) requiring zero dependencies.*
+> 2. ***Actionable Cloud Operations**: Grafana is read-only. DevOpsHub allows engineers to directly **Reboot, Stop, and Start** EC2 instances with full tamper-evident audit logging.*
+> 3. ***Cloud FinOps & Bill Wastage Detective**: DevOpsHub calculates real-time hourly burn rates and monthly spend ($), flagging **Zombie stopped instances** still paying for EBS storage and **idle over-provisioned nodes** (<5% CPU) with exact dollar savings.*
+> 4. ***Security Group Vulnerability Auditor**: Automatically inspects inbound rules and raises alarms if critical ports (Port 22 SSH or MongoDB/MySQL databases) are dangerously open to `0.0.0.0/0`.*
+> 5. ***AI Incident Diagnosis & Self-Healing**: When CPU spikes or a status check fails, our AI engine diagnoses the root cause (memory leak, runaway Docker container) and outputs a copy-pasteable bash self-healing script to fix it."*
+
+
 ---
 
 ## 4. Live Viva Demonstration Script (Step-by-Step)

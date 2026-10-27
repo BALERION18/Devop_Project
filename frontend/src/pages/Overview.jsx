@@ -13,6 +13,8 @@ import {
   Cpu,
   HardDrive,
   GitBranch,
+  Zap,
+  DollarSign,
 } from 'lucide-react';
 import api from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -150,6 +152,77 @@ export const Overview = () => {
             percent={summary?.serverHealth?.memoryUsagePercent || 0}
             accentColor="#38BDF8"
           />
+        </div>
+
+        {/* AWS Cloud Fleet & FinOps Quick Access Banner */}
+        <div
+          className="hub-card"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+            flexWrap: 'wrap',
+            marginBottom: '28px',
+            padding: '16px 20px',
+            background: 'linear-gradient(135deg, rgba(255, 153, 0, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%)',
+            border: '1px solid rgba(255, 153, 0, 0.25)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(255, 153, 0, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#FF9900',
+              }}
+            >
+              <Zap size={20} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>AWS Cloud Infrastructure & FinOps Fleet</span>
+                <span
+                  style={{
+                    fontSize: '0.6875rem',
+                    padding: '2px 8px',
+                    borderRadius: '9999px',
+                    backgroundColor: 'rgba(255, 153, 0, 0.15)',
+                    color: '#FF9900',
+                    fontWeight: 600,
+                  }}
+                >
+                  30s Onboarding
+                </span>
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', margin: '2px 0 0 0' }}>
+                Connect any AWS account or Linux VM to monitor live CloudWatch telemetry, stop/reboot EC2 instances, and detect monthly bill wastage.
+              </p>
+            </div>
+          </div>
+
+          <Link
+            to="/servers"
+            className="btn"
+            style={{
+              fontSize: '0.8125rem',
+              backgroundColor: '#FF9900',
+              color: '#000000',
+              fontWeight: 600,
+              border: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>Launch AWS Cloud Manager</span>
+            <ArrowRight size={14} />
+          </Link>
         </div>
 
         {/* Middle Two-Column Grid: Latest Deployment & Server Health */}
