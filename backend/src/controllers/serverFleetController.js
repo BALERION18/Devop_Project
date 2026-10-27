@@ -79,8 +79,8 @@ export const getFleet = async (req, res, next) => {
     const liveMetrics = await collectSystemMetrics();
 
     const hostNodeData = {
-      name: 'EC2-Production-Host (Active Node)',
-      instanceId: 'i-0ec2hostlocal01',
+      name: 'Devops_proj (Active Host)',
+      instanceId: 'i-06a5adb2fa6d49b70',
       ipAddress: '13.232.254.140',
       privateIp: '10.0.1.5',
       provider: 'AWS EC2',
@@ -102,12 +102,12 @@ export const getFleet = async (req, res, next) => {
       securityScore: 98,
       securityRisks: [],
       connectionType: 'local_host',
-      tags: ['ec2', 'docker', 'web-gateway', 'nginx'],
+      tags: ['role:nginx-web-gateway', 'env:prod', 'managed-by:devopshub'],
     };
 
     if (!dbStatus.isConnected) {
       if (inMemoryFleet.length === 0) {
-        inMemoryFleet = [hostNodeData, ...getSandboxAwsFleet('ap-south-1')];
+        inMemoryFleet = getSandboxAwsFleet('ap-south-1');
       } else {
         inMemoryFleet[0] = { ...inMemoryFleet[0], ...hostNodeData };
       }
@@ -138,8 +138,7 @@ export const getFleet = async (req, res, next) => {
     }
 
     const count = await ServerNode.countDocuments();
-    if (count <= 1) {
-      // Seed realistic nodes with AWS metadata and FinOps properties
+    if (count === 0) {
       const sandboxNodes = getSandboxAwsFleet('ap-south-1');
       await ServerNode.insertMany(sandboxNodes);
     }

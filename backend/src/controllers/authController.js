@@ -7,13 +7,21 @@ import { getDBStatus } from '../config/db.js';
 // In-memory fallback cache when Atlas is not yet connected
 const inMemoryUsers = [];
 
+export const normalizeRole = (role) => {
+  if (role === 'admin' || role === 'leader') return 'leader';
+  return 'teammate';
+};
+
 const generateToken = (user) => {
+  const role = normalizeRole(user.role);
+  const teamId = user.teamId || (user._id ? user._id.toString() : user.id);
   return jwt.sign(
     {
       id: user._id || user.id,
       email: user.email,
       name: user.name,
-      role: user.role,
+      role,
+      teamId,
     },
     config.jwtSecret,
     { expiresIn: config.jwtExpiresIn }
@@ -22,7 +30,7 @@ const generateToken = (user) => {
 
 export const signup = async (req, res, next) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, teamId } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({
@@ -51,25 +59,29 @@ export const signup = async (req, res, next) => {
         });
       }
 
-      const user = await User.create({
+      // New user signup is always a project Leader with their own isolated workspace
+      const user = new User({
         name,
         email: normalizedEmail,
         password,
-        role: role || 'devops_engineer',
+        role: teamId ? 'teammate' : 'leader',
         lastLogin: new Date(),
       });
+      user.teamId = teamId || user._id.toString();
+      await user.save();
 
       const token = generateToken(user);
 
       return res.status(201).json({
         success: true,
-        message: 'Account created successfully in MongoDB Atlas.',
+        message: 'Account created successfully in MongoDB Atlas. You are the project Leader.',
         token,
         user: {
           id: user._id,
           name: user.name,
           email: user.email,
-          role: user.role,
+          role: normalizeRole(user.role),
+          teamId: user.teamId,
           createdAt: user.createdAt,
         },
       });
@@ -86,12 +98,14 @@ export const signup = async (req, res, next) => {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
+    const memId = 'mem_' + Date.now();
     const memoryUser = {
-      id: 'mem_' + Date.now(),
+      id: memId,
       name,
       email: normalizedEmail,
       password: hashedPassword,
-      role: role || 'devops_engineer',
+      role: teamId ? 'teammate' : 'leader',
+      teamId: teamId || memId,
       lastLogin: new Date(),
       createdAt: new Date(),
     };
@@ -101,14 +115,15 @@ export const signup = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Account created in local session (Connect MongoDB Atlas in Settings to persist permanently).',
+      message: 'Account created in local session. You are the project Leader.',
       token,
       isInMemoryMode: true,
       user: {
         id: memoryUser.id,
         name: memoryUser.name,
         email: memoryUser.email,
-        role: memoryUser.role,
+        role: normalizeRole(memoryUser.role),
+        teamId: memoryUser.teamId,
         createdAt: memoryUser.createdAt,
       },
     });
@@ -149,6 +164,10 @@ export const login = async (req, res, next) => {
         });
       }
 
+      if (!user.teamId) {
+        user.teamId = user._id.toString();
+      }
+      user.role = normalizeRole(user.role);
       user.lastLogin = new Date();
       await user.save();
 
@@ -162,7 +181,8 @@ export const login = async (req, res, next) => {
           id: user._id,
           name: user.name,
           email: user.email,
-          role: user.role,
+          role: normalizeRole(user.role),
+          teamId: user.teamId,
           lastLogin: user.lastLogin,
         },
       });
@@ -175,15 +195,16 @@ export const login = async (req, res, next) => {
     if (!memoryUser && (normalizedEmail === 'demo@devopshub.io' || normalizedEmail === 'admin@devopshub.com')) {
       const demoUser = {
         id: 'demo_user_01',
-        name: 'DevOps Engineer',
+        name: 'Project Leader',
         email: normalizedEmail,
-        role: 'admin',
+        role: 'leader',
+        teamId: 'team_demo_01',
         lastLogin: new Date(),
       };
       const token = generateToken(demoUser);
       return res.status(200).json({
         success: true,
-        message: 'Signed in as Demo DevOps Lead (In-Memory session).',
+        message: 'Signed in as Demo Project Leader (In-Memory session).',
         token,
         isInMemoryMode: true,
         user: demoUser,
@@ -206,6 +227,7 @@ export const login = async (req, res, next) => {
     }
 
     memoryUser.lastLogin = new Date();
+    memoryUser.role = normalizeRole(memoryUser.role);
     const token = generateToken(memoryUser);
 
     return res.status(200).json({
@@ -217,7 +239,8 @@ export const login = async (req, res, next) => {
         id: memoryUser.id,
         name: memoryUser.name,
         email: memoryUser.email,
-        role: memoryUser.role,
+        role: normalizeRole(memoryUser.role),
+        teamId: memoryUser.teamId,
         lastLogin: memoryUser.lastLogin,
       },
     });
@@ -244,7 +267,13 @@ export const getMe = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      user: req.user,
+      user: {
+        id: req.user._id || req.user.id,
+        name: req.user.name,
+        email: req.user.email,
+        role: normalizeRole(req.user.role),
+        teamId: req.user.teamId,
+      },
     });
   } catch (err) {
     next(err);

@@ -90,7 +90,7 @@ export const Signup = () => {
             Create your account
           </h1>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            Join DevOpsHub to manage deployments and servers
+            Start as <strong>Project Leader</strong> with an isolated private workspace
           </p>
         </div>
 

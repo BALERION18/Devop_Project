@@ -1,70 +1,152 @@
 import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { getDBStatus } from '../config/db.js';
+import { normalizeRole } from './authController.js';
+import bcrypt from 'bcryptjs';
 
-let inMemoryTeam = [
-  {
-    _id: 'user_1',
-    name: 'Divyansh Lead',
-    email: 'divyansh@devopshub.io',
-    role: 'admin',
-    lastLogin: new Date(),
-    createdAt: new Date(),
-  },
-  {
-    _id: 'user_2',
-    name: 'Sarah Connor',
-    email: 'sarah@devopshub.io',
-    role: 'devops_engineer',
-    lastLogin: new Date(Date.now() - 86400000),
-    createdAt: new Date(Date.now() - 86400000 * 5),
-  },
-  {
-    _id: 'user_3',
-    name: 'James Wilson',
-    email: 'james@devopshub.io',
-    role: 'viewer',
-    lastLogin: new Date(Date.now() - 172800000),
-    createdAt: new Date(Date.now() - 86400000 * 12),
-  },
-];
-
-let inMemoryLogs = [
-  {
-    _id: 'log_1',
-    actor: { name: 'Divyansh Lead', email: 'divyansh@devopshub.io' },
-    action: 'DEPLOYMENT_TRIGGERED',
-    target: 'devopshub-app',
-    details: 'Initiated production build for commit 9b2c3a1 to AWS EC2 Host',
-    createdAt: new Date(Date.now() - 3600000),
-  },
-  {
-    _id: 'log_2',
-    actor: { name: 'Divyansh Lead', email: 'divyansh@devopshub.io' },
-    action: 'SERVER_NODE_ADDED',
-    target: 'EC2-Staging-Cluster',
-    details: 'Configured staging node in ap-south-1',
-    createdAt: new Date(Date.now() - 7200000),
-  },
-  {
-    _id: 'log_3',
-    actor: { name: 'Sarah Connor', email: 'sarah@devopshub.io' },
-    action: 'MONITOR_CREATED',
-    target: 'Backend API Health Probe',
-    details: 'Added synthetic health probe for /api/health (15s interval)',
-    createdAt: new Date(Date.now() - 14400000),
-  },
-];
+// In-Memory fallback team cache
+let inMemoryTeams = {};
 
 export const getTeam = async (req, res, next) => {
   try {
     const dbStatus = getDBStatus();
+    const teamId = req.user.teamId || req.user._id?.toString() || req.user.id;
+
     if (!dbStatus.isConnected) {
-      return res.status(200).json({ success: true, team: inMemoryTeam });
+      if (!inMemoryTeams[teamId]) {
+        inMemoryTeams[teamId] = [
+          {
+            _id: req.user.id || 'current_user',
+            name: req.user.name || 'Project Leader',
+            email: req.user.email,
+            role: 'leader',
+            teamId,
+            lastLogin: new Date(),
+            createdAt: new Date(),
+          },
+        ];
+      }
+      return res.status(200).json({ success: true, team: inMemoryTeams[teamId] });
     }
 
-    const team = await User.find().select('-password').sort({ createdAt: -1 });
-    res.status(200).json({ success: true, team });
+    // Atlas Connected: Only return members that belong to THIS user's team!
+    let team = await User.find({ teamId }).select('-password').sort({ createdAt: -1 });
+
+    // If no team members found with teamId (e.g. legacy user), self-heal and assign current user's teamId
+    if (team.length === 0) {
+      const currentUserDoc = await User.findById(req.user._id);
+      if (currentUserDoc) {
+        currentUserDoc.teamId = currentUserDoc._id.toString();
+        currentUserDoc.role = normalizeRole(currentUserDoc.role);
+        await currentUserDoc.save();
+        team = [currentUserDoc];
+      }
+    }
+
+    const normalizedTeam = team.map((u) => ({
+      _id: u._id,
+      name: u.name,
+      email: u.email,
+      role: normalizeRole(u.role),
+      teamId: u.teamId,
+      lastLogin: u.lastLogin,
+      createdAt: u.createdAt,
+    }));
+
+    res.status(200).json({ success: true, team: normalizedTeam });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const addTeammate = async (req, res, next) => {
+  try {
+    const { name, email, role = 'teammate', password = 'Password123!' } = req.body;
+    const teamId = req.user.teamId || req.user._id?.toString() || req.user.id;
+
+    if (!name || !email) {
+      return res.status(400).json({ success: false, message: 'Name and email are required to add a teammate.' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const validRole = role === 'leader' ? 'leader' : 'teammate';
+    const dbStatus = getDBStatus();
+
+    if (!dbStatus.isConnected) {
+      if (!inMemoryTeams[teamId]) inMemoryTeams[teamId] = [];
+      const existing = inMemoryTeams[teamId].find((u) => u.email === normalizedEmail);
+      if (existing) {
+        return res.status(409).json({ success: false, message: 'A teammate with this email already exists.' });
+      }
+
+      const newMember = {
+        _id: 'mem_' + Date.now(),
+        name,
+        email: normalizedEmail,
+        role: validRole,
+        teamId,
+        lastLogin: null,
+        createdAt: new Date(),
+      };
+      inMemoryTeams[teamId].push(newMember);
+
+      return res.status(201).json({
+        success: true,
+        message: `Teammate ${name} added to your project team as ${validRole.toUpperCase()}.`,
+        member: newMember,
+      });
+    }
+
+    // Atlas Connected
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      // If user exists, attach them to this team if they aren't already
+      if (existingUser.teamId === teamId) {
+        return res.status(409).json({ success: false, message: 'This teammate is already in your team.' });
+      }
+      existingUser.teamId = teamId;
+      existingUser.role = validRole;
+      await existingUser.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `Teammate ${existingUser.name} added to your team as ${validRole.toUpperCase()}.`,
+        member: {
+          _id: existingUser._id,
+          name: existingUser.name,
+          email: existingUser.email,
+          role: validRole,
+          teamId,
+        },
+      });
+    }
+
+    const newTeammate = await User.create({
+      name,
+      email: normalizedEmail,
+      password,
+      role: validRole,
+      teamId,
+    });
+
+    await AuditLog.create({
+      actor: { name: req.user.name, email: req.user.email },
+      action: 'MEMBER_ROLE_UPDATED',
+      target: name,
+      details: `Added new ${validRole} (${normalizedEmail}) to project team`,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Teammate ${name} added to your project team as ${validRole.toUpperCase()}.`,
+      member: {
+        _id: newTeammate._id,
+        name: newTeammate.name,
+        email: newTeammate.email,
+        role: validRole,
+        teamId,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -74,21 +156,91 @@ export const updateRole = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { role } = req.body;
+    const teamId = req.user.teamId || req.user._id?.toString() || req.user.id;
 
-    const allowed = ['admin', 'devops_engineer', 'viewer'];
-    if (!allowed.includes(role)) {
-      return res.status(400).json({ success: false, message: 'Invalid role.' });
+    if (!['leader', 'teammate'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Invalid role. Must be either leader or teammate.' });
     }
 
     const dbStatus = getDBStatus();
     if (!dbStatus.isConnected) {
-      const member = inMemoryTeam.find((u) => u._id === id);
-      if (member) member.role = role;
-      return res.status(200).json({ success: true, message: 'Role updated in session.', member });
+      const teamList = inMemoryTeams[teamId] || [];
+      const member = teamList.find((u) => u._id === id);
+      if (!member) {
+        return res.status(404).json({ success: false, message: 'Teammate not found in your team.' });
+      }
+      member.role = role;
+      return res.status(200).json({
+        success: true,
+        message: `Updated role of ${member.name} to ${role.toUpperCase()}.`,
+        member,
+      });
     }
 
-    const member = await User.findByIdAndUpdate(id, { role }, { new: true }).select('-password');
-    res.status(200).json({ success: true, message: 'Role updated successfully.', member });
+    // Atlas Connected: Ensure the target user belongs to caller's team
+    const member = await User.findOne({ _id: id, teamId });
+    if (!member) {
+      return res.status(404).json({ success: false, message: 'Teammate not found in your project team.' });
+    }
+
+    member.role = role;
+    await member.save();
+
+    await AuditLog.create({
+      actor: { name: req.user.name, email: req.user.email },
+      action: 'MEMBER_ROLE_UPDATED',
+      target: member.name,
+      details: `Changed role to ${role.toUpperCase()}`,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Updated role of ${member.name} to ${role.toUpperCase()}.`,
+      member: {
+        _id: member._id,
+        name: member.name,
+        email: member.email,
+        role,
+        teamId,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const deleteTeammate = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const teamId = req.user.teamId || req.user._id?.toString() || req.user.id;
+
+    if (id === req.user._id?.toString() || id === req.user.id) {
+      return res.status(400).json({ success: false, message: 'You cannot remove yourself from your own team.' });
+    }
+
+    const dbStatus = getDBStatus();
+    if (!dbStatus.isConnected) {
+      if (inMemoryTeams[teamId]) {
+        inMemoryTeams[teamId] = inMemoryTeams[teamId].filter((u) => u._id !== id);
+      }
+      return res.status(200).json({ success: true, message: 'Teammate removed from your team.' });
+    }
+
+    const member = await User.findOne({ _id: id, teamId });
+    if (!member) {
+      return res.status(404).json({ success: false, message: 'Teammate not found in your project team.' });
+    }
+
+    await User.findByIdAndDelete(id);
+
+    await AuditLog.create({
+      actor: { name: req.user.name, email: req.user.email },
+      action: 'SERVER_NODE_REMOVED',
+      target: member.name,
+      details: `Removed teammate ${member.name} (${member.email}) from project team`,
+    });
+
+    res.status(200).json({ success: true, message: `Teammate ${member.name} removed from your project team.` });
   } catch (err) {
     next(err);
   }
@@ -98,12 +250,7 @@ export const getAuditLogs = async (req, res, next) => {
   try {
     const dbStatus = getDBStatus();
     if (!dbStatus.isConnected) {
-      return res.status(200).json({ success: true, logs: inMemoryLogs });
-    }
-
-    const count = await AuditLog.countDocuments();
-    if (count === 0) {
-      await AuditLog.create(inMemoryLogs.map(({ _id, ...rest }) => rest));
+      return res.status(200).json({ success: true, logs: [] });
     }
 
     const logs = await AuditLog.find().sort({ createdAt: -1 }).limit(30);

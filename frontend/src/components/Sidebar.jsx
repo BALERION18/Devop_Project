@@ -336,19 +336,21 @@ export const Sidebar = ({ isCollapsed, setIsCollapsed, mobileOpen, setMobileOpen
                   marginBottom: '4px',
                 }}
               >
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Role</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Workspace Role</div>
                 <div
                   style={{
                     fontSize: '0.8125rem',
                     color: 'var(--text-primary)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '4px',
+                    gap: '6px',
                     marginTop: '2px',
+                    textTransform: 'capitalize',
+                    fontWeight: 600,
                   }}
                 >
-                  <ShieldCheck size={14} style={{ color: 'var(--success)' }} />
-                  {user?.role || 'devops_engineer'}
+                  <ShieldCheck size={14} style={{ color: (user?.role === 'admin' || user?.role === 'leader') ? 'var(--accent-violet)' : '#38BDF8' }} />
+                  {(user?.role === 'admin' || user?.role === 'leader') ? 'Project Leader' : 'Teammate'}
                 </div>
               </div>
 

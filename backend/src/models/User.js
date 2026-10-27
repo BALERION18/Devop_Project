@@ -27,8 +27,17 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['admin', 'devops_engineer', 'viewer'],
-      default: 'devops_engineer',
+      enum: ['leader', 'teammate', 'admin', 'devops_engineer', 'viewer'],
+      default: 'leader',
+    },
+    teamId: {
+      type: String,
+      default: '',
+      index: true,
+    },
+    teamName: {
+      type: String,
+      default: 'Project Workspace Team',
     },
     avatar: {
       type: String,
