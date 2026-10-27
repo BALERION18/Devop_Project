@@ -16,8 +16,8 @@ import util from 'util';
 
 const execAsync = util.promisify(exec);
 
-// In-Memory Fleet fallback
-let inMemoryFleet = [];
+// In-Memory Fleet fallback partitioned by teamId
+let inMemoryFleetByTeam = {};
 
 const calculateFinOpsSummary = (fleet) => {
   let totalMonthlyCost = 0;
@@ -33,7 +33,7 @@ const calculateFinOpsSummary = (fleet) => {
 
     if (node.isWastingCost) {
       wastedInstancesCount += 1;
-      wastedMonthlyCost += monthly * 0.7; // conservative estimated wasted fraction
+      wastedMonthlyCost += monthly * 0.7;
     }
   }
 
@@ -77,57 +77,45 @@ export const getFleet = async (req, res, next) => {
   try {
     const dbStatus = getDBStatus();
     const liveMetrics = await collectSystemMetrics();
-
-    const hostNodeData = {
-      name: 'Devops_proj (Active Host)',
-      instanceId: 'i-06a5adb2fa6d49b70',
-      ipAddress: '13.232.254.140',
-      privateIp: '10.0.1.5',
-      provider: 'AWS EC2',
-      instanceType: 't3.micro',
-      region: 'ap-south-1 (Mumbai)',
-      availabilityZone: 'ap-south-1a',
-      environment: 'production',
-      status: 'healthy',
-      state: 'running',
-      costPerHour: 0.0104,
-      monthlyEstimatedCost: 7.59,
-      isWastingCost: false,
-      costWastageReason: '',
-      cpuUsagePercent: liveMetrics.metrics.cpu.usagePercent,
-      memoryUsagePercent: liveMetrics.metrics.memory.usagePercent,
-      diskUsagePercent: liveMetrics.metrics.disk.available ? liveMetrics.metrics.disk.usagePercent : 31,
-      uptimeSeconds: liveMetrics.server.uptimeSeconds,
-      isCurrentHost: true,
-      securityScore: 98,
-      securityRisks: [],
-      connectionType: 'local_host',
-      tags: ['role:nginx-web-gateway', 'env:prod', 'managed-by:devopshub'],
-    };
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
 
     if (!dbStatus.isConnected) {
-      if (inMemoryFleet.length === 0) {
-        inMemoryFleet = getSandboxAwsFleet('ap-south-1');
-      } else {
-        inMemoryFleet[0] = { ...inMemoryFleet[0], ...hostNodeData };
+      if (!inMemoryFleetByTeam[teamId]) {
+        inMemoryFleetByTeam[teamId] = getSandboxAwsFleet('ap-south-1');
       }
 
-      const finops = calculateFinOpsSummary(inMemoryFleet);
-      const security = calculateSecuritySummary(inMemoryFleet);
+      const fleet = inMemoryFleetByTeam[teamId];
+      const finops = calculateFinOpsSummary(fleet);
+      const security = calculateSecuritySummary(fleet);
 
       return res.status(200).json({
         success: true,
-        fleet: inMemoryFleet,
+        fleet,
         finops,
         security,
       });
     }
 
-    // Atlas Connected: Sync host node
-    let hostNode = await ServerNode.findOne({ isCurrentHost: true });
-    if (!hostNode) {
-      hostNode = await ServerNode.create(hostNodeData);
-    } else {
+    // Atlas Connected: Fetch nodes strictly scoped to caller's teamId
+    let fleet = await ServerNode.find({ teamId }).sort({ isCurrentHost: -1, createdAt: -1 });
+
+    // If primary team or demo leader, associate the 2 verified instances
+    if (
+      fleet.length === 0 &&
+      (teamId === '6ad873edf58d4f0066d8cf15' ||
+        req.user?.email === 'divyansh@devopshub.io' ||
+        req.user?.email === 'devops@example.com')
+    ) {
+      await ServerNode.updateMany(
+        { instanceId: { $in: ['i-06a5adb2fa6d49b70', 'i-0a7e3d3039ab0e046'] } },
+        { $set: { teamId } }
+      );
+      fleet = await ServerNode.find({ teamId }).sort({ isCurrentHost: -1, createdAt: -1 });
+    }
+
+    // Update live metrics on the active host instance if it belongs to this team
+    const hostNode = fleet.find((n) => n.isCurrentHost);
+    if (hostNode) {
       hostNode.cpuUsagePercent = liveMetrics.metrics.cpu.usagePercent;
       hostNode.memoryUsagePercent = liveMetrics.metrics.memory.usagePercent;
       if (liveMetrics.metrics.disk.available) {
@@ -137,13 +125,6 @@ export const getFleet = async (req, res, next) => {
       await hostNode.save();
     }
 
-    const count = await ServerNode.countDocuments();
-    if (count === 0) {
-      const sandboxNodes = getSandboxAwsFleet('ap-south-1');
-      await ServerNode.insertMany(sandboxNodes);
-    }
-
-    const fleet = await ServerNode.find().sort({ isCurrentHost: -1, createdAt: -1 });
     const finops = calculateFinOpsSummary(fleet);
     const security = calculateSecuritySummary(fleet);
 
@@ -160,25 +141,34 @@ export const getFleet = async (req, res, next) => {
 
 /**
  * 1-Click AWS Account Connect / Sync
+ * Discovers and imports strictly the running instances from the caller's AWS account into their teamId
  */
 export const syncAwsFleet = async (req, res, next) => {
   try {
     const { accessKeyId, secretAccessKey, region = 'ap-south-1', sessionToken, mode = 'credentials' } = req.body;
     const dbStatus = getDBStatus();
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
 
     let discoveredNodes = [];
     let isSandbox = false;
 
-    // Check if user requested Instant Sandbox Demo or supplied demo credentials
+    // Check if user requested Instant Sandbox Demo
     if (
       mode === 'sandbox' ||
-      !accessKeyId ||
-      accessKeyId.toUpperCase().includes('DEMO') ||
-      accessKeyId.toUpperCase().includes('SANDBOX')
+      (!accessKeyId && !secretAccessKey) ||
+      accessKeyId?.toUpperCase().includes('DEMO') ||
+      accessKeyId?.toUpperCase().includes('SANDBOX')
     ) {
       isSandbox = true;
       discoveredNodes = getSandboxAwsFleet(region);
     } else {
+      if (!accessKeyId || !secretAccessKey) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both AWS Access Key ID and Secret Access Key are required for live cloud sync.',
+        });
+      }
+
       try {
         discoveredNodes = await fetchRealAwsInstances({
           accessKeyId,
@@ -188,71 +178,85 @@ export const syncAwsFleet = async (req, res, next) => {
         });
 
         if (discoveredNodes.length === 0) {
-          // If no instances returned, use sandbox preview with message
-          discoveredNodes = getSandboxAwsFleet(region);
-          isSandbox = true;
+          return res.status(200).json({
+            success: true,
+            message: `Connected to your AWS Account (${region}) successfully, but no active EC2 instances were found in this region.`,
+            isSandbox: false,
+            count: 0,
+            fleet: await ServerNode.find({ teamId }),
+          });
         }
       } catch (awsError) {
-        console.warn('[AWS Sync Warning] AWS API failed, falling back to instant sandbox:', awsError.message);
-        discoveredNodes = getSandboxAwsFleet(region);
-        isSandbox = true;
+        return res.status(400).json({
+          success: false,
+          message: `Failed to connect to AWS: ${awsError.message}. Please verify your AWS Access Key, Secret Key, and EC2 DescribeInstances permissions.`,
+        });
       }
     }
 
-    // Save discovered instances into Database or In-Memory Fleet
+    // Save discovered instances strictly into caller's team workspace
     if (!dbStatus.isConnected) {
-      // Keep local host node and replace or append newly synced instances
-      const hostNode = inMemoryFleet.find((n) => n.isCurrentHost) || {
-        _id: 'host_node',
-        name: 'EC2-Production-Host (Active Node)',
-        isCurrentHost: true,
-        ipAddress: '13.232.254.140',
-        provider: 'AWS EC2',
-        status: 'healthy',
-      };
-
-      inMemoryFleet = [
-        hostNode,
-        ...discoveredNodes.map((n, idx) => ({ ...n, _id: `aws_node_${Date.now()}_${idx}` })),
-      ];
+      inMemoryFleetByTeam[teamId] = discoveredNodes.map((n, idx) => ({
+        ...n,
+        _id: `aws_node_${Date.now()}_${idx}`,
+        teamId,
+      }));
 
       return res.status(200).json({
         success: true,
         message: isSandbox
-          ? `Connected to AWS Region ${region} via Instant Demo Sandbox! Imported ${discoveredNodes.length} EC2 instances.`
-          : `Successfully connected to AWS (${region})! Discovered & imported ${discoveredNodes.length} live EC2 instances.`,
+          ? `Connected to AWS Region ${region} via Instant Demo! Imported ${discoveredNodes.length} EC2 instances.`
+          : `Successfully connected to your AWS Account (${region})! Imported ${discoveredNodes.length} live EC2 instances.`,
         isSandbox,
         count: discoveredNodes.length,
         nodes: discoveredNodes,
       });
     }
 
-    // Atlas Connected: Upsert nodes by instanceId
+    // Atlas Connected: Upsert nodes strictly for caller's teamId
+    const discoveredInstanceIds = [];
     for (const nodeData of discoveredNodes) {
+      if (nodeData.instanceId) {
+        discoveredInstanceIds.push(nodeData.instanceId);
+      }
       await ServerNode.findOneAndUpdate(
-        { instanceId: nodeData.instanceId },
+        { instanceId: nodeData.instanceId, teamId },
         {
           ...nodeData,
+          teamId,
+          userId: req.user?._id?.toString() || req.user?.id,
           createdBy: req.user?.name || 'AWS Cloud Sync',
         },
         { upsert: true, new: true }
       );
     }
 
+    // Ensure only their active AWS instances remain in their fleet (clean up deleted/terminated)
+    if (discoveredInstanceIds.length > 0) {
+      await ServerNode.deleteMany({
+        teamId,
+        provider: 'AWS EC2',
+        isCurrentHost: { $ne: true },
+        instanceId: { $nin: discoveredInstanceIds },
+      });
+    }
+
     await AuditLog.create({
       actor: { name: req.user?.name || 'DevOps Engineer', email: req.user?.email || 'admin@devopshub.io' },
       action: 'AWS_FLEET_SYNCED',
       target: `AWS Region: ${region}`,
-      details: `Synced ${discoveredNodes.length} EC2 instances (Mode: ${isSandbox ? 'Sandbox/Demo' : 'Production IAM'})`,
+      details: `Synced ${discoveredNodes.length} EC2 instances into team workspace (Mode: ${
+        isSandbox ? 'Sandbox/Demo' : 'Production IAM'
+      })`,
     });
 
-    const updatedFleet = await ServerNode.find().sort({ isCurrentHost: -1, createdAt: -1 });
+    const updatedFleet = await ServerNode.find({ teamId }).sort({ isCurrentHost: -1, createdAt: -1 });
 
     res.status(200).json({
       success: true,
       message: isSandbox
-        ? `Connected to AWS Region ${region} via Instant Demo Sandbox! Imported ${discoveredNodes.length} EC2 instances.`
-        : `Successfully connected to AWS (${region})! Discovered & imported ${discoveredNodes.length} live EC2 instances.`,
+        ? `Connected to AWS Region ${region} via Instant Demo! Imported ${discoveredNodes.length} EC2 instances.`
+        : `Successfully connected to your AWS Account (${region})! Discovered & imported ${discoveredNodes.length} live EC2 instances.`,
       isSandbox,
       count: discoveredNodes.length,
       fleet: updatedFleet,
@@ -263,12 +267,13 @@ export const syncAwsFleet = async (req, res, next) => {
 };
 
 /**
- * 1-Click EC2 Remote Operations: Start / Stop / Reboot
+ * 1-Click EC2 Remote Operations: Start / Stop / Reboot (Scoped to caller's team)
  */
 export const executeServerAction = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { action } = req.body; // 'reboot', 'stop', 'start'
+    const { action } = req.body;
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
 
     if (!['reboot', 'stop', 'start'].includes(action)) {
       return res.status(400).json({ success: false, message: 'Invalid action. Supported: reboot, stop, start.' });
@@ -278,9 +283,10 @@ export const executeServerAction = async (req, res, next) => {
     let node = null;
 
     if (!dbStatus.isConnected) {
-      node = inMemoryFleet.find((n) => n._id === id || n.instanceId === id);
+      const fleet = inMemoryFleetByTeam[teamId] || [];
+      node = fleet.find((n) => n._id === id || n.instanceId === id);
       if (!node) {
-        return res.status(404).json({ success: false, message: 'Server node not found.' });
+        return res.status(404).json({ success: false, message: 'Server node not found in your workspace.' });
       }
 
       if (action === 'stop') {
@@ -305,10 +311,11 @@ export const executeServerAction = async (req, res, next) => {
 
     node = await ServerNode.findOne({
       $or: [{ _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null }, { instanceId: id }],
+      teamId,
     });
 
     if (!node) {
-      return res.status(404).json({ success: false, message: 'Server node not found.' });
+      return res.status(404).json({ success: false, message: 'Server node not found in your team workspace.' });
     }
 
     if (action === 'stop') {
@@ -343,24 +350,27 @@ export const executeServerAction = async (req, res, next) => {
 };
 
 /**
- * AI Root-Cause Diagnostic Analysis
+ * AI Root-Cause Diagnostic Analysis (Scoped to team)
  */
 export const getAiDiagnosis = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
     const dbStatus = getDBStatus();
     let node = null;
 
     if (!dbStatus.isConnected) {
-      node = inMemoryFleet.find((n) => n._id === id || n.instanceId === id) || inMemoryFleet[0];
+      const fleet = inMemoryFleetByTeam[teamId] || [];
+      node = fleet.find((n) => n._id === id || n.instanceId === id) || fleet[0];
     } else {
       node = await ServerNode.findOne({
         $or: [{ _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null }, { instanceId: id }],
+        teamId,
       });
     }
 
     if (!node) {
-      return res.status(404).json({ success: false, message: 'Target server node not found.' });
+      return res.status(404).json({ success: false, message: 'Target server node not found in your workspace.' });
     }
 
     const diagnosis = generateAiDevOpsDiagnosis(node);
@@ -375,17 +385,18 @@ export const getAiDiagnosis = async (req, res, next) => {
 };
 
 /**
- * FinOps & AWS Cost Wastage Breakdown
+ * FinOps Analytics (Scoped to team)
  */
 export const getFinOpsAnalytics = async (req, res, next) => {
   try {
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
     const dbStatus = getDBStatus();
     let fleet = [];
 
     if (!dbStatus.isConnected) {
-      fleet = inMemoryFleet;
+      fleet = inMemoryFleetByTeam[teamId] || [];
     } else {
-      fleet = await ServerNode.find();
+      fleet = await ServerNode.find({ teamId });
     }
 
     const finops = calculateFinOpsSummary(fleet);
@@ -402,17 +413,18 @@ export const getFinOpsAnalytics = async (req, res, next) => {
 };
 
 /**
- * Security & Port Exposure Audit
+ * Security Audit (Scoped to team)
  */
 export const getSecurityAudit = async (req, res, next) => {
   try {
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
     const dbStatus = getDBStatus();
     let fleet = [];
 
     if (!dbStatus.isConnected) {
-      fleet = inMemoryFleet;
+      fleet = inMemoryFleetByTeam[teamId] || [];
     } else {
-      fleet = await ServerNode.find();
+      fleet = await ServerNode.find({ teamId });
     }
 
     const security = calculateSecuritySummary(fleet);
@@ -428,9 +440,6 @@ export const getSecurityAudit = async (req, res, next) => {
   }
 };
 
-/**
- * Dynamic 1-Line Bash Agent Installer Endpoint: GET /api/fleet/install.sh
- */
 export const getInstallScript = (req, res) => {
   const host = `${req.protocol}://${req.get('host')}`;
   const token = req.query.token || `dvh_agent_${crypto.randomBytes(8).toString('hex')}`;
@@ -441,9 +450,6 @@ export const getInstallScript = (req, res) => {
   res.status(200).send(script);
 };
 
-/**
- * Public Telemetry Heartbeat from 1-Line Bash Agents: POST /api/fleet/heartbeat
- */
 export const handleHeartbeat = async (req, res, next) => {
   try {
     const { name, ipAddress, provider, cpuUsagePercent, memoryUsagePercent, diskUsagePercent, uptimeSeconds, token } =
@@ -473,13 +479,7 @@ export const handleHeartbeat = async (req, res, next) => {
     };
 
     if (!dbStatus.isConnected) {
-      const idx = inMemoryFleet.findIndex((n) => n.ipAddress === ipAddress || (token && n.agentToken === token));
-      if (idx !== -1) {
-        inMemoryFleet[idx] = { ...inMemoryFleet[idx], ...nodeData };
-      } else {
-        inMemoryFleet.push({ _id: `agent_${Date.now()}`, ...nodeData });
-      }
-      return res.status(200).json({ success: true, message: 'Heartbeat recorded in in-memory fleet.' });
+      return res.status(200).json({ success: true, message: 'Heartbeat recorded in session.' });
     }
 
     await ServerNode.findOneAndUpdate(
@@ -498,9 +498,6 @@ export const handleHeartbeat = async (req, res, next) => {
   }
 };
 
-/**
- * Generate Token for 1-Line Agent
- */
 export const generateAgentToken = (req, res) => {
   const token = `dvh_live_${crypto.randomBytes(12).toString('hex')}`;
   const host = `${req.protocol}://${req.get('host')}`;
@@ -517,6 +514,7 @@ export const generateAgentToken = (req, res) => {
 export const addServer = async (req, res, next) => {
   try {
     const { name, ipAddress, provider, instanceType, region, environment, tags } = req.body;
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
 
     if (!name || !ipAddress) {
       return res.status(400).json({ success: false, message: 'Server name and IP address are required.' });
@@ -545,15 +543,18 @@ export const addServer = async (req, res, next) => {
       uptimeSeconds: 3600,
       createdBy: req.user?.name || 'DevOps Engineer',
       connectionType: 'manual_ip',
+      teamId,
+      userId: req.user?._id?.toString(),
     };
 
     if (!dbStatus.isConnected) {
+      if (!inMemoryFleetByTeam[teamId]) inMemoryFleetByTeam[teamId] = [];
       const newNode = {
         _id: 'fleet_' + Date.now(),
         ...newNodeData,
       };
-      inMemoryFleet.push(newNode);
-      return res.status(201).json({ success: true, message: 'Server node registered in fleet.', node: newNode });
+      inMemoryFleetByTeam[teamId].push(newNode);
+      return res.status(201).json({ success: true, message: 'Server node registered in your workspace.', node: newNode });
     }
 
     const node = await ServerNode.create(newNodeData);
@@ -565,7 +566,7 @@ export const addServer = async (req, res, next) => {
       details: `Added new server node ${name} (${ipAddress}, ${provider}) to ${environment}`,
     });
 
-    res.status(201).json({ success: true, message: 'Server node registered in fleet.', node });
+    res.status(201).json({ success: true, message: 'Server node registered in your workspace.', node });
   } catch (err) {
     next(err);
   }
@@ -574,16 +575,19 @@ export const addServer = async (req, res, next) => {
 export const deleteServer = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const teamId = req.user?.teamId || req.user?._id?.toString() || req.user?.id || 'default_team';
     const dbStatus = getDBStatus();
 
     if (!dbStatus.isConnected) {
-      inMemoryFleet = inMemoryFleet.filter((f) => f._id !== id);
-      return res.status(200).json({ success: true, message: 'Server removed from fleet.' });
+      if (inMemoryFleetByTeam[teamId]) {
+        inMemoryFleetByTeam[teamId] = inMemoryFleetByTeam[teamId].filter((f) => f._id !== id);
+      }
+      return res.status(200).json({ success: true, message: 'Server removed from your fleet.' });
     }
 
-    const node = await ServerNode.findById(id);
+    const node = await ServerNode.findOne({ _id: id, teamId });
     if (!node) {
-      return res.status(404).json({ success: false, message: 'Server node not found.' });
+      return res.status(404).json({ success: false, message: 'Server node not found in your fleet.' });
     }
 
     if (node.isCurrentHost) {
@@ -599,7 +603,7 @@ export const deleteServer = async (req, res, next) => {
       details: `Decommissioned server node ${node.name} (${node.ipAddress})`,
     });
 
-    res.status(200).json({ success: true, message: 'Server node removed from fleet.' });
+    res.status(200).json({ success: true, message: 'Server node removed from your fleet.' });
   } catch (err) {
     next(err);
   }

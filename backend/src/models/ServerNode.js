@@ -134,6 +134,16 @@ const serverNodeSchema = new mongoose.Schema(
       type: String,
       default: 'admin',
     },
+    teamId: {
+      type: String,
+      default: '',
+      index: true,
+    },
+    userId: {
+      type: String,
+      default: '',
+      index: true,
+    },
   },
   {
     timestamps: true,

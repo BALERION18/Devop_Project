@@ -81,6 +81,10 @@ export const fetchRealAwsInstances = async ({ accessKeyId, secretAccessKey, regi
     const instanceName = nameTag || `AWS-EC2-${instanceId.slice(-6)}`;
     const instanceType = inst.InstanceType || 't3.micro';
     const state = inst.State?.Name || 'running';
+    // Skip terminated or shutting-down instances so only active/existing instances are shown
+    if (state === 'terminated' || state === 'shutting-down') {
+      continue;
+    }
     const publicIp = inst.PublicIpAddress || inst.PrivateIpAddress || 'No Public IP';
     const privateIp = inst.PrivateIpAddress || '';
     const az = inst.Placement?.AvailabilityZone || `${region}a`;
@@ -234,10 +238,10 @@ export const fetchRealAwsInstances = async ({ accessKeyId, secretAccessKey, regi
 export const getSandboxAwsFleet = (selectedRegion = 'ap-south-1') => {
   return [
     {
-      name: 'Devops_proj (Active Host)',
-      instanceId: 'i-06a5adb2fa6d49b70',
-      ipAddress: '13.232.254.140',
-      privateIp: '10.0.1.5',
+      name: 'Sandbox-Web-Gateway',
+      instanceId: 'i-sandbox-web-01',
+      ipAddress: '15.206.182.11',
+      privateIp: '10.0.1.10',
       provider: 'AWS EC2',
       instanceType: 't3.micro',
       region: selectedRegion,
@@ -245,7 +249,7 @@ export const getSandboxAwsFleet = (selectedRegion = 'ap-south-1') => {
       environment: 'production',
       status: 'healthy',
       state: 'running',
-      isCurrentHost: true,
+      isCurrentHost: false,
       costPerHour: 0.0104,
       monthlyEstimatedCost: 7.59,
       isWastingCost: false,
@@ -263,19 +267,19 @@ export const getSandboxAwsFleet = (selectedRegion = 'ap-south-1') => {
           description: 'HTTP Port 80 ingress (Standard web gateway reverse proxy).',
         },
       ],
-      connectionType: 'local_host',
+      connectionType: 'aws_cloudwatch_iam',
       cloudWatchMetrics: {
         networkInBytes: 4892000,
         networkOutBytes: 12480000,
         statusCheckFailed: 0,
       },
-      tags: ['role:nginx-web-gateway', 'env:prod', 'managed-by:devopshub'],
+      tags: ['role:demo-web-gateway', 'env:prod', 'managed-by:devopshub'],
     },
     {
-      name: 'test_1',
-      instanceId: 'i-0a7e3d3039ab0e046',
-      ipAddress: '65.2.150.55',
-      privateIp: '10.0.2.14',
+      name: 'Sandbox-Worker-Node',
+      instanceId: 'i-sandbox-worker-02',
+      ipAddress: '15.206.182.22',
+      privateIp: '10.0.2.20',
       provider: 'AWS EC2',
       instanceType: 't3.micro',
       region: selectedRegion,
@@ -300,7 +304,7 @@ export const getSandboxAwsFleet = (selectedRegion = 'ap-south-1') => {
         networkOutBytes: 3820000,
         statusCheckFailed: 0,
       },
-      tags: ['role:staging-api', 'env:staging', 'managed-by:devopshub'],
+      tags: ['role:demo-worker', 'env:staging', 'managed-by:devopshub'],
     },
   ];
 };
