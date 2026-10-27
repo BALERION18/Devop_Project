@@ -13,6 +13,7 @@ import serverRoutes from './routes/serverRoutes.js';
 import fleetRoutes from './routes/fleetRoutes.js';
 import uptimeRoutes from './routes/uptimeRoutes.js';
 import teamRoutes from './routes/teamRoutes.js';
+import integrationRoutes from './routes/integrationRoutes.js';
 import { getHealth } from './controllers/serverController.js';
 
 const app = express();
@@ -71,6 +72,7 @@ app.use('/api/server', serverRoutes);
 app.use('/api/fleet', fleetRoutes);
 app.use('/api/monitors', uptimeRoutes);
 app.use('/api/team', teamRoutes);
+app.use('/api/integrations', integrationRoutes);
 
 // Root route
 app.get('/', (req, res) => {
