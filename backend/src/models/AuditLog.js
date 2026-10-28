@@ -37,6 +37,11 @@ const auditLogSchema = new mongoose.Schema(
       enum: ['success', 'warning', 'error'],
       default: 'success',
     },
+    teamId: {
+      type: String,
+      default: '',
+      index: true,
+    },
   },
   {
     timestamps: true,

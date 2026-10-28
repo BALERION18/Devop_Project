@@ -12,6 +12,8 @@ import {
   getInstallScript,
   handleHeartbeat,
   generateAgentToken,
+  clearFleet,
+  getAwsEnvStatus,
 } from '../controllers/serverFleetController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
@@ -24,10 +26,12 @@ router.post('/heartbeat', handleHeartbeat);
 // Protected fleet & AWS endpoints
 router.get('/', protect, getFleet);
 router.post('/', protect, addServer);
+router.delete('/clear', protect, clearFleet);
 router.delete('/:id', protect, deleteServer);
 router.post('/diagnostic', protect, runDiagnostic);
 
 // AWS Auto-Discovery & Cloud FinOps / Security endpoints
+router.get('/aws/env-config', protect, getAwsEnvStatus);
 router.post('/aws/sync', protect, syncAwsFleet);
 router.post('/aws/action/:id', protect, executeServerAction);
 router.get('/aws/ai-diagnose/:id', protect, getAiDiagnosis);

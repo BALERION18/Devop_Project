@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import { config } from '../config/env.js';
 import { User } from '../models/User.js';
 
@@ -21,7 +22,13 @@ export const protect = async (req, res, next) => {
     
     // Check if user still exists if database is connected
     try {
-      const user = await User.findById(decoded.id).select('-password');
+      let user = null;
+      if (decoded.id && mongoose.isValidObjectId(decoded.id)) {
+        user = await User.findById(decoded.id).select('-password');
+      } else if (decoded.email) {
+        user = await User.findOne({ email: decoded.email.toLowerCase().trim() }).select('-password');
+      }
+
       if (user) {
         if (!user.teamId) {
           user.teamId = user._id.toString();

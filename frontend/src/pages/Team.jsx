@@ -42,20 +42,36 @@ export const Team = () => {
   const fetchData = async (isManual = false) => {
     if (isManual) setRefreshing(true);
     try {
-      const [teamRes, logRes] = await Promise.all([
+      const [teamRes, logRes] = await Promise.allSettled([
         api.get('/team/members'),
         api.get('/team/audit-logs'),
       ]);
 
-      if (teamRes.data.success) {
-        setTeam(teamRes.data.team || []);
+      let loadedTeam = [];
+      if (teamRes.status === 'fulfilled' && teamRes.value?.data?.success) {
+        loadedTeam = teamRes.value.data.team || [];
       }
-      if (logRes.data.success) {
-        setLogs(logRes.data.logs || []);
+
+      if (loadedTeam.length === 0 && currentUser) {
+        loadedTeam = [
+          {
+            _id: currentUser.id || currentUser._id || 'current_user',
+            name: currentUser.name || 'Workspace Leader',
+            email: currentUser.email,
+            role: currentUser.role || 'leader',
+            teamId: currentUser.teamId || 'default_team',
+            createdAt: new Date(),
+          },
+        ];
+      }
+      setTeam(loadedTeam);
+
+      if (logRes.status === 'fulfilled' && logRes.value?.data?.success) {
+        setLogs(logRes.value.data.logs || []);
       }
     } catch (err) {
       console.error('Failed to load team data:', err);
-      addToast('Failed to load team data.', 'error');
+      if (isManual) addToast('Failed to load team data.', 'error');
     } finally {
       setLoading(false);
       if (isManual) setRefreshing(false);

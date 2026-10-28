@@ -1,5 +1,14 @@
-import { EC2Client, DescribeInstancesCommand, RebootInstancesCommand, StopInstancesCommand, StartInstancesCommand, DescribeSecurityGroupsCommand } from '@aws-sdk/client-ec2';
+import {
+  EC2Client,
+  DescribeInstancesCommand,
+  DescribeRegionsCommand,
+  RebootInstancesCommand,
+  StopInstancesCommand,
+  StartInstancesCommand,
+  DescribeSecurityGroupsCommand,
+} from '@aws-sdk/client-ec2';
 import { CloudWatchClient, GetMetricDataCommand } from '@aws-sdk/client-cloudwatch';
+import { config } from '../config/env.js';
 
 // AWS EC2 On-Demand Standard Hourly Pricing (USD)
 export const AWS_PRICING_MAP = {
@@ -28,71 +37,157 @@ export const getHourlyCost = (instanceType) => {
   return AWS_PRICING_MAP[instanceType] || 0.0208; // default to t3.small
 };
 
+// Standard AWS Regions supported for EC2 auto-discovery
+export const STANDARD_AWS_REGIONS = [
+  'us-east-1',      // US East (N. Virginia - default for most AWS accounts)
+  'us-east-2',      // US East (Ohio)
+  'us-west-1',      // US West (N. California)
+  'us-west-2',      // US West (Oregon)
+  'ap-south-1',     // Asia Pacific (Mumbai)
+  'ap-southeast-1', // Asia Pacific (Singapore)
+  'ap-northeast-1', // Asia Pacific (Tokyo)
+  'eu-central-1',   // Europe (Frankfurt)
+  'eu-west-1',      // Europe (Ireland)
+  'sa-east-1',      // South America (São Paulo)
+];
+
 /**
- * Fetch live EC2 instances from real AWS account using AWS SDK
+ * Fetch live EC2 instances from real AWS account using AWS SDK.
+ * Supports single region, 'all' regions (multi-region auto-scan),
+ * and automatic fallback scanning if 0 instances are found in the selected region.
  */
-export const fetchRealAwsInstances = async ({ accessKeyId, secretAccessKey, region = 'ap-south-1', sessionToken }) => {
+export const fetchRealAwsInstances = async ({ accessKeyId, secretAccessKey, region = 'all', sessionToken }) => {
   const credentials = {
     accessKeyId: accessKeyId.trim(),
     secretAccessKey: secretAccessKey.trim(),
   };
-  if (sessionToken) {
+  if (sessionToken && sessionToken.trim()) {
     credentials.sessionToken = sessionToken.trim();
   }
 
-  const ec2Client = new EC2Client({ region, credentials });
-  const cloudWatchClient = new CloudWatchClient({ region, credentials });
+  const cleanRegion = (region || 'all').trim().toLowerCase();
+  let targetRegions = [];
 
-  // 1. Describe EC2 Instances
-  const describeCmd = new DescribeInstancesCommand({});
-  const ec2Response = await ec2Client.send(describeCmd);
+  if (cleanRegion === 'all' || cleanRegion === 'auto') {
+    // Try auto-detecting enabled regions for this AWS account via DescribeRegions
+    try {
+      const probeClient = new EC2Client({ region: 'us-east-1', credentials });
+      const regRes = await probeClient.send(
+        new DescribeRegionsCommand({
+          Filters: [{ Name: 'opt-in-status', Values: ['opt-in-not-required', 'opted-in'] }],
+        })
+      );
+      if (regRes.Regions && regRes.Regions.length > 0) {
+        targetRegions = regRes.Regions.map((r) => r.RegionName).filter(Boolean);
+      }
+    } catch (regErr) {
+      targetRegions = STANDARD_AWS_REGIONS;
+    }
+    if (!targetRegions || targetRegions.length === 0) {
+      targetRegions = STANDARD_AWS_REGIONS;
+    }
+  } else {
+    targetRegions = [cleanRegion];
+  }
 
-  const rawInstances = [];
-  if (ec2Response.Reservations) {
-    for (const res of ec2Response.Reservations) {
-      if (res.Instances) {
-        for (const inst of res.Instances) {
-          rawInstances.push(inst);
+  // Helper to query instances in a single region
+  const queryRegionInstances = async (r) => {
+    const ec2Client = new EC2Client({ region: r, credentials });
+    const describeCmd = new DescribeInstancesCommand({});
+    const ec2Response = await ec2Client.send(describeCmd);
+
+    const instances = [];
+    if (ec2Response.Reservations) {
+      for (const res of ec2Response.Reservations) {
+        if (res.Instances) {
+          for (const inst of res.Instances) {
+            instances.push({ inst, region: r });
+          }
         }
       }
     }
+    return { region: r, instances };
+  };
+
+  // 1. Describe EC2 Instances across target regions in parallel
+  const regionResults = await Promise.allSettled(targetRegions.map((r) => queryRegionInstances(r)));
+
+  let allDiscovered = [];
+  const scannedSuccessfulRegions = [];
+  let firstError = null;
+
+  for (const result of regionResults) {
+    if (result.status === 'fulfilled') {
+      scannedSuccessfulRegions.push(result.value.region);
+      if (result.value.instances.length > 0) {
+        allDiscovered.push(...result.value.instances);
+      }
+    } else {
+      if (!firstError) firstError = result.reason;
+    }
   }
 
-  // 2. Fetch Security Groups to audit open ports
-  let sgMap = {};
-  try {
-    const sgCmd = new DescribeSecurityGroupsCommand({});
-    const sgRes = await ec2Client.send(sgCmd);
-    if (sgRes.SecurityGroups) {
-      for (const sg of sgRes.SecurityGroups) {
-        sgMap[sg.GroupId] = sg;
+  // 2. Automatic Fallback: If user specified a single region (e.g. ap-south-1) and 0 instances were found,
+  // scan remaining standard regions automatically so the user is never stuck if their friend created the EC2 elsewhere!
+  if (allDiscovered.length === 0 && cleanRegion !== 'all' && cleanRegion !== 'auto') {
+    const remainingRegions = STANDARD_AWS_REGIONS.filter((r) => r !== cleanRegion);
+    const fallbackResults = await Promise.allSettled(remainingRegions.map((r) => queryRegionInstances(r)));
+
+    for (const res of fallbackResults) {
+      if (res.status === 'fulfilled' && res.value.instances.length > 0) {
+        allDiscovered.push(...res.value.instances);
       }
     }
-  } catch (err) {
-    console.warn('[AWS Fleet] Could not inspect security groups:', err.message);
   }
 
-  // 3. Process each instance and query CloudWatch metrics
+  // If no instances were found and EVERY attempted region failed with an error, throw the first error
+  if (allDiscovered.length === 0 && scannedSuccessfulRegions.length === 0 && firstError) {
+    throw firstError;
+  }
+
+  // 3. Process each discovered instance, caching Security Groups and CloudWatch per region
+  const sgMapByRegion = {};
   const processedNodes = [];
 
-  for (const inst of rawInstances) {
+  for (const item of allDiscovered) {
+    const inst = item.inst;
+    const instRegion = item.region;
     const instanceId = inst.InstanceId;
     const nameTag = inst.Tags?.find((t) => t.Key === 'Name')?.Value;
     const instanceName = nameTag || `AWS-EC2-${instanceId.slice(-6)}`;
     const instanceType = inst.InstanceType || 't3.micro';
     const state = inst.State?.Name || 'running';
+
     // Skip terminated or shutting-down instances so only active/existing instances are shown
     if (state === 'terminated' || state === 'shutting-down') {
       continue;
     }
+
     const publicIp = inst.PublicIpAddress || inst.PrivateIpAddress || 'No Public IP';
     const privateIp = inst.PrivateIpAddress || '';
-    const az = inst.Placement?.AvailabilityZone || `${region}a`;
+    const az = inst.Placement?.AvailabilityZone || `${instRegion}a`;
 
     const costPerHour = getHourlyCost(instanceType);
     const monthlyCost = Number((costPerHour * 730).toFixed(2));
 
     // Security Audit for instance
+    if (!sgMapByRegion[instRegion]) {
+      sgMapByRegion[instRegion] = {};
+      try {
+        const ec2Client = new EC2Client({ region: instRegion, credentials });
+        const sgCmd = new DescribeSecurityGroupsCommand({});
+        const sgRes = await ec2Client.send(sgCmd);
+        if (sgRes.SecurityGroups) {
+          for (const sg of sgRes.SecurityGroups) {
+            sgMapByRegion[instRegion][sg.GroupId] = sg;
+          }
+        }
+      } catch (err) {
+        console.warn(`[AWS Fleet] Could not inspect security groups in ${instRegion}:`, err.message);
+      }
+    }
+    const sgMap = sgMapByRegion[instRegion] || {};
+
     const securityRisks = [];
     let securityScore = 100;
 
@@ -148,6 +243,7 @@ export const fetchRealAwsInstances = async ({ accessKeyId, secretAccessKey, regi
 
     if (state === 'running') {
       try {
+        const cloudWatchClient = new CloudWatchClient({ region: instRegion, credentials });
         const endTime = new Date();
         const startTime = new Date(endTime.getTime() - 60 * 60 * 1000); // 1 hour window
 
@@ -201,7 +297,7 @@ export const fetchRealAwsInstances = async ({ accessKeyId, secretAccessKey, regi
       privateIp,
       provider: 'AWS EC2',
       instanceType,
-      region,
+      region: instRegion,
       availabilityZone: az,
       environment: instanceName.toLowerCase().includes('prod') ? 'production' : 'staging',
       status: state === 'running' ? (cpuPercent > 85 ? 'degraded' : 'healthy') : 'offline',
@@ -313,24 +409,28 @@ export const getSandboxAwsFleet = (selectedRegion = 'ap-south-1') => {
  * Execute Action on EC2 Instance (Start, Stop, Reboot)
  */
 export const executeEc2Action = async ({ instanceId, action, credentials, region = 'ap-south-1' }) => {
-  if (credentials?.accessKeyId && credentials?.secretAccessKey) {
+  const effectiveKey = credentials?.accessKeyId || config.awsAccessKeyId;
+  const effectiveSecret = credentials?.secretAccessKey || config.awsSecretAccessKey;
+  const effectiveToken = credentials?.sessionToken || config.awsSessionToken;
+
+  if (effectiveKey && effectiveSecret) {
     const creds = {
-      accessKeyId: credentials.accessKeyId.trim(),
-      secretAccessKey: credentials.secretAccessKey.trim(),
+      accessKeyId: effectiveKey.trim(),
+      secretAccessKey: effectiveSecret.trim(),
     };
-    if (credentials.sessionToken) creds.sessionToken = credentials.sessionToken.trim();
+    if (effectiveToken) creds.sessionToken = effectiveToken.trim();
 
     const ec2Client = new EC2Client({ region, credentials: creds });
 
     if (action === 'reboot') {
       await ec2Client.send(new RebootInstancesCommand({ InstanceIds: [instanceId] }));
-      return { success: true, message: `Reboot command sent to AWS EC2 ${instanceId}.` };
+      return { success: true, message: `Reboot command sent to AWS EC2 ${instanceId} (${region}).` };
     } else if (action === 'stop') {
       await ec2Client.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
-      return { success: true, message: `Stop command dispatched to AWS EC2 ${instanceId}.` };
+      return { success: true, message: `Stop command dispatched to AWS EC2 ${instanceId} (${region}).` };
     } else if (action === 'start') {
       await ec2Client.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
-      return { success: true, message: `Start command sent to AWS EC2 ${instanceId}.` };
+      return { success: true, message: `Start command sent to AWS EC2 ${instanceId} (${region}).` };
     }
   }
 

@@ -56,12 +56,14 @@ export const Servers = () => {
   const [isAwsModalOpen, setIsAwsModalOpen] = useState(false);
   const [awsTab, setAwsTab] = useState('sandbox'); // 'sandbox' or 'iam'
   const [awsForm, setAwsForm] = useState({
-    region: 'ap-south-1',
+    region: 'all',
     accessKeyId: '',
     secretAccessKey: '',
     sessionToken: '',
+    wipePrevious: true,
   });
   const [isSyncingAws, setIsSyncingAws] = useState(false);
+  const [envAwsConfig, setEnvAwsConfig] = useState(null);
 
   // 1-Line Bash Agent Modal
   const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
@@ -131,6 +133,11 @@ export const Servers = () => {
 
   useEffect(() => {
     fetchData();
+    api.get('/fleet/aws/env-config').then((res) => {
+      if (res.data?.success && res.data.hasEnvCredentials) {
+        setEnvAwsConfig(res.data);
+      }
+    }).catch(() => {});
     const interval = setInterval(() => fetchData(false), 15000);
     return () => clearInterval(interval);
   }, []);
@@ -142,23 +149,29 @@ export const Servers = () => {
     try {
       const payload =
         mode === 'sandbox'
-          ? { mode: 'sandbox', region: awsForm.region }
+          ? { mode: 'sandbox', region: awsForm.region, wipePrevious: awsForm.wipePrevious }
           : {
               mode: 'credentials',
               region: awsForm.region,
               accessKeyId: awsForm.accessKeyId,
               secretAccessKey: awsForm.secretAccessKey,
               sessionToken: awsForm.sessionToken,
+              wipePrevious: awsForm.wipePrevious,
             };
 
       const res = await api.post('/fleet/aws/sync', payload);
       if (res.data.success) {
-        addToast(res.data.message, 'success');
+        addToast(res.data.message, 'success', 6000);
         setIsAwsModalOpen(false);
         fetchData(true);
+      } else {
+        addToast(res.data.message || 'AWS Sync completed with notice.', 'warning', 7000);
+        if (res.data.fleet) {
+          fetchData(true);
+        }
       }
     } catch (err) {
-      addToast(err.response?.data?.message || 'Failed to sync with AWS.', 'error');
+      addToast(err.response?.data?.message || 'Failed to sync with AWS.', 'error', 7000);
     } finally {
       setIsSyncingAws(false);
     }
@@ -260,10 +273,23 @@ export const Servers = () => {
       const res = await api.delete(`/fleet/${id}`);
       if (res.data.success) {
         addToast(`Server "${name}" removed from fleet.`, 'info');
-        fetchData();
+        fetchData(true);
       }
     } catch (err) {
       addToast(err.response?.data?.message || 'Failed to delete server.', 'error');
+    }
+  };
+
+  const handleClearFleet = async () => {
+    if (!confirm('Are you sure you want to clear all server nodes from your fleet? You can re-import them with AWS sync anytime.')) return;
+    try {
+      const res = await api.delete('/fleet/clear');
+      if (res.data.success) {
+        addToast('All servers cleared from your fleet.', 'info');
+        fetchData(true);
+      }
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Failed to clear fleet.', 'error');
     }
   };
 
@@ -412,6 +438,18 @@ export const Servers = () => {
               <Zap size={15} fill="#000000" />
               <span>Connect AWS Account</span>
             </button>
+
+            {fleet.length > 0 && (
+              <button
+                onClick={handleClearFleet}
+                className="btn btn-secondary"
+                title="Clear all server nodes"
+                style={{ fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: '6px', color: '#EF4444' }}
+              >
+                <Trash2 size={14} />
+                <span>Clear Fleet</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -839,16 +877,14 @@ export const Servers = () => {
                           {server.state ? server.state.toUpperCase() : 'ONLINE'}
                         </span>
 
-                        {!server.isCurrentHost && (
-                          <button
-                            onClick={() => handleDeleteServer(server._id, server.name)}
-                            className="btn-icon"
-                            title="Decommission Server"
-                            style={{ color: 'var(--text-muted)', padding: '4px' }}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleDeleteServer(server._id, server.name)}
+                          className="btn-icon"
+                          title="Decommission Server"
+                          style={{ color: 'var(--text-muted)', padding: '4px' }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
                     </div>
 
@@ -1367,17 +1403,51 @@ export const Servers = () => {
                       value={awsForm.region}
                       onChange={(e) => setAwsForm({ ...awsForm, region: e.target.value })}
                     >
-                      <option value="ap-south-1">ap-south-1 (Asia Pacific - Mumbai)</option>
-                      <option value="us-east-1">us-east-1 (US East - N. Virginia)</option>
+                      <option value="all">⚡ All Regions (Auto-Detect / Multi-Region Scan)</option>
+                      <option value="us-east-1">us-east-1 (US East - N. Virginia - Default AWS)</option>
+                      <option value="us-east-2">us-east-2 (US East - Ohio)</option>
+                      <option value="us-west-1">us-west-1 (US West - N. California)</option>
                       <option value="us-west-2">us-west-2 (US West - Oregon)</option>
+                      <option value="ap-south-1">ap-south-1 (Asia Pacific - Mumbai)</option>
+                      <option value="ap-southeast-1">ap-southeast-1 (Asia Pacific - Singapore)</option>
+                      <option value="ap-northeast-1">ap-northeast-1 (Asia Pacific - Tokyo)</option>
                       <option value="eu-central-1">eu-central-1 (Europe - Frankfurt)</option>
                       <option value="eu-west-1">eu-west-1 (Europe - Ireland)</option>
-                      <option value="ap-southeast-1">ap-southeast-1 (Asia Pacific - Singapore)</option>
+                      <option value="sa-east-1">sa-east-1 (South America - São Paulo)</option>
                     </select>
                   </div>
                 </div>
               ) : (
                 <div>
+                  {envAwsConfig?.hasEnvCredentials && (
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        borderRadius: 'var(--radius-md)',
+                        marginBottom: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <div style={{ fontSize: '0.75rem', color: '#93C5FD' }}>
+                        <strong>Credentials Found in .env:</strong> Key <code className="font-mono">{envAwsConfig.maskedKey}</code> (Region: {envAwsConfig.region})
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.75rem', padding: '4px 10px', backgroundColor: '#2563EB', color: '#FFFFFF', border: 'none' }}
+                        onClick={() => {
+                          handleAwsSync('credentials');
+                        }}
+                      >
+                        ⚡ Sync from .env
+                      </button>
+                    </div>
+                  )}
+
                   <div
                     style={{
                       padding: '12px 14px',
@@ -1403,12 +1473,17 @@ export const Servers = () => {
                       value={awsForm.region}
                       onChange={(e) => setAwsForm({ ...awsForm, region: e.target.value })}
                     >
-                      <option value="ap-south-1">ap-south-1 (Asia Pacific - Mumbai)</option>
-                      <option value="us-east-1">us-east-1 (US East - N. Virginia)</option>
+                      <option value="all">⚡ All Regions (Auto-Detect / Multi-Region Scan - Recommended)</option>
+                      <option value="us-east-1">us-east-1 (US East - N. Virginia - Default AWS)</option>
+                      <option value="us-east-2">us-east-2 (US East - Ohio)</option>
+                      <option value="us-west-1">us-west-1 (US West - N. California)</option>
                       <option value="us-west-2">us-west-2 (US West - Oregon)</option>
+                      <option value="ap-south-1">ap-south-1 (Asia Pacific - Mumbai)</option>
+                      <option value="ap-southeast-1">ap-southeast-1 (Asia Pacific - Singapore)</option>
+                      <option value="ap-northeast-1">ap-northeast-1 (Asia Pacific - Tokyo)</option>
                       <option value="eu-central-1">eu-central-1 (Europe - Frankfurt)</option>
                       <option value="eu-west-1">eu-west-1 (Europe - Ireland)</option>
-                      <option value="ap-southeast-1">ap-southeast-1 (Asia Pacific - Singapore)</option>
+                      <option value="sa-east-1">sa-east-1 (South America - São Paulo)</option>
                     </select>
                   </div>
 
@@ -1444,6 +1519,25 @@ export const Servers = () => {
                       onChange={(e) => setAwsForm({ ...awsForm, sessionToken: e.target.value })}
                     />
                   </div>
+
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      cursor: 'pointer',
+                      fontSize: '0.8125rem',
+                      marginTop: '12px',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={awsForm.wipePrevious}
+                      onChange={(e) => setAwsForm({ ...awsForm, wipePrevious: e.target.checked })}
+                    />
+                    <span>Replace & clear previous server fleet with this AWS account</span>
+                  </label>
                 </div>
               )}
             </div>
@@ -1559,8 +1653,8 @@ export const Servers = () => {
       {/* MODAL 3: AI ROOT-CAUSE DIAGNOSIS & REMEDIATION               */}
       {/* ============================================================ */}
       {isAiModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsAiModalOpen(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
+        <div className="modal-overlay modal-overlay-top" onClick={() => setIsAiModalOpen(false)} style={{ zIndex: 1200 }}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px', zIndex: 1201 }}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Sparkles size={18} style={{ color: 'var(--accent-primary)' }} />
@@ -1871,8 +1965,8 @@ export const Servers = () => {
 
       {/* Diagnostic Probe Runner Modal */}
       {isDiagModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsDiagModalOpen(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
+        <div className="modal-overlay modal-overlay-top" onClick={() => setIsDiagModalOpen(false)} style={{ zIndex: 1200 }}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px', zIndex: 1201 }}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Terminal size={18} style={{ color: 'var(--accent-primary)' }} />

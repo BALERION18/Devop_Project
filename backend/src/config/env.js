@@ -21,4 +21,8 @@ export const config = {
   serverName: process.env.SERVER_NAME || 'EC2-Node-01',
   metricsIntervalMs: parseInt(process.env.METRICS_COLLECTION_INTERVAL_MS || '10000', 10),
   isProduction: process.env.NODE_ENV === 'production',
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+  awsRegion: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'all',
+  awsSessionToken: process.env.AWS_SESSION_TOKEN || '',
 };

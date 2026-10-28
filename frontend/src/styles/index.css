@@ -407,6 +407,10 @@ p {
   padding: 20px;
 }
 
+.modal-overlay-top {
+  z-index: 1200 !important;
+}
+
 .modal-dialog {
   background-color: var(--bg-card);
   border: 1px solid var(--border-subtle);
@@ -417,6 +421,11 @@ p {
   display: flex;
   flex-direction: column;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+}
+
+.modal-overlay-top .modal-dialog {
+  z-index: 1201 !important;
+  box-shadow: 0 30px 60px -10px rgba(0, 0, 0, 0.85);
 }
 
 .modal-header {
@@ -449,7 +458,7 @@ p {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: 1100;
+  z-index: 2000;
 }
 
 .toast {

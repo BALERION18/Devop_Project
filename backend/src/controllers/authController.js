@@ -53,9 +53,32 @@ export const signup = async (req, res, next) => {
       // Real MongoDB Atlas Storage
       const existingUser = await User.findOne({ email: normalizedEmail });
       if (existingUser) {
+        // If this teammate was invited/added by a Leader, activate their account with their password!
+        if (existingUser.role === 'teammate') {
+          existingUser.name = name;
+          existingUser.password = password; // Will be hashed by pre('save')
+          existingUser.lastLogin = new Date();
+          await existingUser.save();
+
+          const token = generateToken(existingUser);
+          return res.status(200).json({
+            success: true,
+            message: 'Your teammate account has been activated! Welcome to the project workspace.',
+            token,
+            user: {
+              id: existingUser._id,
+              name: existingUser.name,
+              email: existingUser.email,
+              role: 'teammate',
+              teamId: existingUser.teamId,
+              createdAt: existingUser.createdAt,
+            },
+          });
+        }
+
         return res.status(409).json({
           success: false,
-          message: 'A user with this email address already exists.',
+          message: 'A user with this email address already exists. Please log in.',
         });
       }
 
