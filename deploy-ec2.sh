@@ -66,6 +66,7 @@ else
 fi
 
 echo "🐳 [4/5] Building & Launching Multi-Stage Docker Containers..."
+sudo docker rm -f devopshub-backend devopshub-frontend 2>/dev/null || true
 sudo docker compose down --remove-orphans 2>/dev/null || true
 sudo docker compose up --build -d
 
